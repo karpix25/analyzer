@@ -497,45 +497,58 @@ async def root():
             "submit_multipart": "POST /detect/video",
             "submit_url": "POST /detect/video/url",
             "task_status": "GET /task/{task_id}",
-            "result_files": "GET /result/{task_id}/{filename}",
-        },
+        "service": "video-analyzer",
+        "s3_enabled": USE_S3,
     }
 
 
 @app.get("/tasks")
 async def list_tasks():
     """Список всех задач."""
-    tasks = await list_all_tasks()
-    return {"tasks": tasks}
+    try:
+        tasks = await list_all_tasks()
+        return {"tasks": tasks}
+    except Exception as e:
+        return {"error": str(e), "tasks": []}
 
 
 @app.get("/debug/tasks")
 async def debug_tasks():
     """Debug endpoint to check all task statuses."""
-    tasks = await list_all_tasks()
-    
-    stats = {
-        "total": len(tasks),
-        "pending": 0,
-        "processing": 0,
-        "completed": 0,
-        "failed": 0,
-    }
-    
-    task_details = []
-    for task in tasks:
-        status = task.get("status", "unknown")
-        stats[status] = stats.get(status, 0) + 1
+    try:
+        tasks = await list_all_tasks()
         
-        task_details.append({
-            "task_id": task.get("task_id"),
-            "status": status,
-            "created_at": task.get("created_at"),
-            "completed_at": task.get("completed_at"),
-            "error": task.get("error"),
-        })
-    
-    return {
-        "stats": stats,
-        "tasks": task_details,
-    }
+        stats = {
+            "total": len(tasks),
+            "pending": 0,
+            "processing": 0,
+            "completed": 0,
+            "failed": 0,
+        }
+        
+        task_details = []
+        for task in tasks:
+            status = task.get("status", "unknown")
+            if status in stats:
+                stats[status] += 1
+            else:
+                stats[status] = 1
+            
+            task_details.append({
+                "task_id": task.get("task_id"),
+                "status": status,
+                "created_at": task.get("created_at"),
+                "completed_at": task.get("completed_at"),
+                "error": task.get("error"),
+            })
+        
+        return {
+            "stats": stats,
+            "tasks": task_details,
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "stats": {"total": 0},
+            "tasks": [],
+        }
