@@ -806,10 +806,10 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     rw = min(rw - trim_l, trim_w)
     rh = min(rh - trim_t, trim_h)
 
-    # Боковые границы: срез не более 10%, низ может срезаться до 20%.
+    # Боковые границы: срез не более 10%, низ может срезаться до 40% (вернем 40% так как используем медиану).
     max_side_crop_x = int(0.10 * w)
     max_top_crop = int(0.10 * h)
-    max_bottom_crop = int(0.20 * h)
+    max_bottom_crop = int(0.40 * h)
 
     # Ограничиваем слева/справа
     if rx > max_side_crop_x:
