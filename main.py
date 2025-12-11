@@ -36,9 +36,15 @@ from storage_s3 import s3_storage
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.StreamHandler(sys.stderr),  # Also stderr for Easypanel
+    ],
     force=True,
 )
+print("=" * 80, file=sys.stderr, flush=True)
+print("VIDEO ANALYZER STARTING", file=sys.stderr, flush=True)
+print("=" * 80, file=sys.stderr, flush=True)
 for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
     logging.getLogger(name).setLevel(logging.INFO)
 logger = logging.getLogger("app")
