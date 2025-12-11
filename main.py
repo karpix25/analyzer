@@ -306,7 +306,7 @@ async def send_webhook(webhook_url: str, task_id: str, result: Optional[Dict], c
 
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(webhook_url, json=payload, timeout=10.0)
+            response = await client.post(webhook_url, json=payload, timeout=30.0)
             logger.info(f"[WEBHOOK] Response status: {response.status_code}")
             logger.debug(f"[WEBHOOK] Response headers: {dict(response.headers)}")
             logger.debug(f"[WEBHOOK] Response body: {response.text[:200]}")
