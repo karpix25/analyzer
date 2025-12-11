@@ -25,8 +25,11 @@ logger.info("[INIT] EasyOCR model loaded")
 
 
 # ---- Frame sampling ---------------------------------------------------------
-def sample_frames(video_path: str, max_frames: int = 10) -> List[np.ndarray]:
-    """Равномерно выбирает кадры из видео."""
+def sample_frames(video_path: str, max_frames: int = 45) -> List[np.ndarray]:
+    """
+    Выбирает кадры из видео группами (начало, середина, конец) для лучшего анализа статики/динамики.
+    Всего ~45 кадров (3 группы по 15).
+    """
     cap = cv2.VideoCapture(video_path)
     frames: List[np.ndarray] = []
 
@@ -35,31 +38,38 @@ def sample_frames(video_path: str, max_frames: int = 10) -> List[np.ndarray]:
 
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
-    start_frame = int(round(fps * 3.0)) if fps and fps > 1e-3 else 90
-
-    if total > 0:
-        if start_frame >= total:
-            start_frame = 0
-        available = max(total - start_frame, 1)
-        count = min(max_frames, available)
-        indices = np.linspace(start_frame, total - 1, num=count, dtype=np.int32)
+    
+    # Если видео очень короткое (< 2 сек или < 50 кадров), берем равномерно
+    if total < 50:
+        indices = np.linspace(0, total - 1, num=min(total, 20), dtype=np.int32)
         for idx in np.unique(indices):
             cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
             ok, frame = cap.read()
             if ok and frame is not None:
                 frames.append(frame)
     else:
-        skipped = 0
-        while skipped < start_frame:
-            ok, _ = cap.read()
-            if not ok:
-                break
-            skipped += 1
-        while len(frames) < max_frames:
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                break
-            frames.append(frame)
+        # Стратегия 3 групп
+        group_size = 15
+        
+        # Точки старта групп (10%, 50%, 90%)
+        start_indices = [
+            int(total * 0.1),
+            int(total * 0.5),
+            int(total * 0.9)
+        ]
+        
+        # Корректируем, чтобы не вылезти за пределы
+        start_indices = [min(s, total - group_size) for s in start_indices]
+        # Корректируем, чтобы не были отрицательными
+        start_indices = [max(0, s) for s in start_indices]
+        
+        for start_idx in start_indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_idx)
+            for _ in range(group_size):
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    break
+                frames.append(frame)
 
     cap.release()
     return frames
