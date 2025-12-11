@@ -490,13 +490,9 @@ async def get_result_file(task_id: str, filename: str):
 
 @app.get("/")
 async def root():
+    """Health check."""
     return {
         "status": "ok",
-        "service": "Video Box Detector - Async",
-        "endpoints": {
-            "submit_multipart": "POST /detect/video",
-            "submit_url": "POST /detect/video/url",
-            "task_status": "GET /task/{task_id}",
         "service": "video-analyzer",
         "s3_enabled": USE_S3,
     }
@@ -528,18 +524,19 @@ async def debug_tasks():
         
         task_details = []
         for task in tasks:
-            status = task.get("status", "unknown")
+            # TaskInfo is a Pydantic model, use attributes directly
+            status = task.status if hasattr(task, 'status') else "unknown"
             if status in stats:
                 stats[status] += 1
             else:
                 stats[status] = 1
             
             task_details.append({
-                "task_id": task.get("task_id"),
+                "task_id": task.task_id if hasattr(task, 'task_id') else None,
                 "status": status,
-                "created_at": task.get("created_at"),
-                "completed_at": task.get("completed_at"),
-                "error": task.get("error"),
+                "created_at": task.created_at if hasattr(task, 'created_at') else None,
+                "completed_at": task.completed_at if hasattr(task, 'completed_at') else None,
+                "error": task.error if hasattr(task, 'error') else None,
             })
         
         return {
