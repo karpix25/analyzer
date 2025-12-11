@@ -195,14 +195,8 @@ async def process_video_task(
 
         mid_frame = frames[len(frames) // 2]
         
-        if is_motion:
-            # Skip refine_crop_rect for motion results to prevent eating static content (graphs)
-            # Motion detection is already restrictive enough.
-            logger.info(f"[TASK {task_id}] Skipping refine_crop_rect for motion result")
-            cx, cy, cw, ch = x, y, w, h
-        else:
-            # Fallback path - use refine to clean up uniform borders
-            cx, cy, cw, ch = refine_crop_rect(mid_frame, x, y, w, h)
+        # Always run refine for cleanup, but limits are now safer (10% side, 20% bottom)
+        cx, cy, cw, ch = refine_crop_rect(mid_frame, x, y, w, h)
             
         bbox_clean = (cx, cy, cw, ch)
 
