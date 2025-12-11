@@ -30,15 +30,26 @@ class S3Storage:
 
         # Initialize S3 client
         try:
+            from botocore.config import Config
+
             session_kwargs = {
                 "aws_access_key_id": S3_ACCESS_KEY,
                 "aws_secret_access_key": S3_SECRET_KEY,
                 "region_name": self.region,
             }
 
+            # Configure for S3-compatible services
             if S3_ENDPOINT_URL:
                 session_kwargs["endpoint_url"] = S3_ENDPOINT_URL
+                # Use path-style addressing and disable payload signing for compatibility
+                session_kwargs["config"] = Config(
+                    signature_version='s3v4',
+                    s3={'addressing_style': 'path'}
+                )
                 logger.info(f"[S3] Using custom endpoint: {S3_ENDPOINT_URL}")
+            else:
+                # Standard AWS S3 configuration
+                session_kwargs["config"] = Config(signature_version='s3v4')
 
             self.s3_client = boto3.client("s3", **session_kwargs)
             logger.info(f"[S3] Initialized S3 client for bucket: {self.bucket}")
