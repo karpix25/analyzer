@@ -14,7 +14,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 
-from config import PUBLIC_BASE_URL, RESULT_DIR, WORKER_CONCURRENCY
+from config import PUBLIC_BASE_URL, RESULT_DIR, USE_S3, WORKER_CONCURRENCY
 from processing import crop_video_ffmpeg, estimate_crop_box, refine_crop_rect, sample_frames, select_best_frame
 from schemas import ProcessingJob, TaskInfo, TaskStatus, VideoSubmitRequest, new_task_id, now_iso
 from storage import (
@@ -27,6 +27,8 @@ from storage import (
     save_task_info,
     update_task_fields,
 )
+from storage_s3 import s3_storage
+
 
 # -----------------------------------------------------------------------------
 # Logging: force stdout handler so logs видны в Docker/Easypanel
@@ -203,14 +205,27 @@ async def process_video_task(
 
         video_crop, text_crop, clean_crop = crop_video_ffmpeg(video_path, task_id, text_bottom, bbox_rough, bbox_clean)
 
-        base_url = _resolve_base_url()
-        result = {
-            "task_id": task_id,
-            "box": {"x": x, "y": y, "w": w, "h": h},
-            "clean_box": {"x": cx, "y": cy, "w": cw, "h": ch},
-            "text_bottom": int(text_bottom),
-            "score": round(float(quality), 4),
-            "files": {
+        # Upload to S3 if enabled
+        if USE_S3 and s3_storage.enabled:
+            logger.info(f"[TASK {task_id}] Uploading results to S3...")
+            s3_urls = s3_storage.upload_task_results(task_id, task_result_dir)
+            
+            # Use S3 URLs if upload successful
+            base_url = None  # Not needed for S3
+            files = {
+                "content_video": s3_urls.get("content_video"),
+                "clean_video": s3_urls.get("clean_video"),
+                "content_frame": s3_urls.get("content_frame"),
+                "text_video": s3_urls.get("text_video"),
+                "text_frame": s3_urls.get("text_frame"),
+                "debug_frame": s3_urls.get("debug_frame"),
+                "density_profile": s3_urls.get("density_profile"),
+            }
+            logger.info(f"[TASK {task_id}] S3 upload completed")
+        else:
+            # Use local URLs
+            base_url = _resolve_base_url()
+            files = {
                 "content_video": f"{base_url}/result/{task_id}/video_crop.mp4",
                 "clean_video": f"{base_url}/result/{task_id}/clean_crop.mp4" if clean_crop else None,
                 "content_frame": f"{base_url}/result/{task_id}/frame.jpg",
@@ -218,7 +233,15 @@ async def process_video_task(
                 "text_frame": f"{base_url}/result/{task_id}/text_frame.jpg",
                 "debug_frame": f"{base_url}/result/{task_id}/debug.jpg",
                 "density_profile": f"{base_url}/result/{task_id}/density_profile.jpg",
-            },
+            }
+
+        result = {
+            "task_id": task_id,
+            "box": {"x": x, "y": y, "w": w, "h": h},
+            "clean_box": {"x": cx, "y": cy, "w": cw, "h": ch},
+            "text_bottom": int(text_bottom),
+            "score": round(float(quality), 4),
+            "files": files,
         }
 
         await update_task_fields(
