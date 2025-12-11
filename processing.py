@@ -65,6 +65,84 @@ def sample_frames(video_path: str, max_frames: int = 10) -> List[np.ndarray]:
     return frames
 
 
+# ---- Motion-based video window detection -----------------------------------
+def detect_video_window_by_motion(
+    frames: List[np.ndarray],
+    variance_percentile: float = 75.0,
+    min_area_ratio: float = 0.10,
+) -> Optional[Tuple[int, int, int, int]]:
+    """
+    Detect video window by analyzing pixel motion across frames.
+    
+    Static elements (text, logos, borders) have low temporal variance.
+    Dynamic elements (video content) have high temporal variance.
+    
+    Args:
+        frames: List of sampled frames from video
+        variance_percentile: Percentile for variance threshold (default: 75)
+        min_area_ratio: Minimum video window size as ratio of frame (default: 0.10)
+    
+    Returns:
+        (x, y, w, h) bounding box of video region, or None if detection fails
+    """
+    if len(frames) < 3:
+        logger.warning("[MOTION] Not enough frames for motion detection")
+        return None
+    
+    H, W = frames[0].shape[:2]
+    logger.info(f"[MOTION] Analyzing {len(frames)} frames for motion detection...")
+    
+    # Convert frames to grayscale for variance calculation
+    gray_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY).astype(np.float32) for f in frames]
+    
+    # Calculate temporal variance per pixel
+    frames_array = np.array(gray_frames)  # Shape: (n_frames, H, W)
+    variance_map = np.var(frames_array, axis=0)  # Shape: (H, W)
+    
+    # Normalize variance to 0-255 range for visualization
+    variance_normalized = cv2.normalize(variance_map, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    
+    # Calculate adaptive threshold based on variance distribution
+    variance_flat = variance_map.ravel()
+    variance_flat = variance_flat[variance_flat > 0]  # Ignore zero variance pixels
+    
+    if len(variance_flat) == 0:
+        logger.warning("[MOTION] No motion detected in video (all pixels static)")
+        return None
+    
+    threshold_value = np.percentile(variance_flat, variance_percentile)
+    logger.info(f"[MOTION] Variance threshold (p{variance_percentile}): {threshold_value:.2f}")
+    
+    # Create binary motion mask
+    motion_mask = (variance_map > threshold_value).astype(np.uint8) * 255
+    
+    # Morphological operations to clean up noise
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    motion_mask = cv2.morphologyEx(motion_mask, cv2.MORPH_OPEN, kernel, iterations=2)
+    motion_mask = cv2.morphologyEx(motion_mask, cv2.MORPH_CLOSE, kernel, iterations=3)
+    
+    # Find connected components
+    contours, _ = cv2.findContours(motion_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if not contours:
+        logger.warning("[MOTION] No motion regions found after thresholding")
+        return None
+    
+    # Find largest connected component (likely the video window)
+    largest_contour = max(contours, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(largest_contour)
+    
+    # Validate minimum size
+    area_ratio = (w * h) / (W * H)
+    if area_ratio < min_area_ratio:
+        logger.warning(f"[MOTION] Detected region too small: {area_ratio:.2%} < {min_area_ratio:.2%}")
+        return None
+    
+    logger.info(f"[MOTION] Detected video window: x={x}, y={y}, w={w}, h={h} (area={area_ratio:.1%})")
+    
+    return (x, y, w, h)
+
+
 # ---- Text detection helpers -------------------------------------------------
 def _text_mask_improved(frame: np.ndarray, search_height_ratio: float = 0.65) -> np.ndarray:
     """Детекция белого текста на черном фоне."""
@@ -347,29 +425,64 @@ def estimate_crop_box(frames: List[np.ndarray], task_id: str) -> Tuple[Tuple[int
             logger.info(f"[INFO] Using median from {len(all_bottoms)} frames: {text_bottom}")
     else:
         logger.info(f"[INFO] Text found on middle frame: bottom={text_bottom}, contours={len(valid_contours)}")
-
+    
+    # Set dimensions for motion detection
     H = H_orig
     W = W_orig
-
     margin = max(int(0.01 * H), 10)
-    crop_top = text_bottom + margin
-
-    logger.info(f"[CROP] text_bottom={text_bottom}, margin={margin}, crop_top={crop_top}")
-
-    crop_height = H - crop_top
-    min_crop_h = max(int(0.4 * H), 250)
-
-    if crop_height < min_crop_h:
-        logger.warning(f"[WARNING] Crop height {crop_height} < min {min_crop_h}")
-        crop_top = H - min_crop_h
-        crop_height = min_crop_h
-
-        if crop_top <= text_bottom:
-            logger.error(f"[ERROR] Cannot satisfy min height! Using minimal margin.")
-            crop_top = text_bottom + max(int(0.01 * H), 8)
-            crop_height = H - crop_top
-
     mid_frame_orig = frames[len(frames) // 2]
+    
+    
+    # === NEW: Motion-based video window detection ===
+    logger.info("[MOTION] Attempting motion-based video window detection...")
+    motion_bbox = detect_video_window_by_motion(frames)
+    
+    if motion_bbox is not None:
+        # Motion detection successful - use it for bbox
+        mx, my, mw, mh = motion_bbox
+        logger.info(f"[MOTION] Using motion-detected bbox: x={mx}, y={my}, w={mw}, h={mh}")
+        
+        # Combine with text_bottom: crop from text_bottom to motion bbox bottom
+        if text_bottom is not None and text_bottom < my + mh:
+            # Text is above motion region - use text_bottom as top
+            final_y = text_bottom + margin
+            final_h = (my + mh) - final_y
+            logger.info(f"[HYBRID] Combined text_bottom ({text_bottom}) + motion bbox")
+        else:
+            # No text or text is below motion - use motion bbox as-is
+            final_y = my
+            final_h = mh
+            logger.info(f"[MOTION] Using pure motion bbox (no text detected above)")
+        
+        # Use motion bbox for horizontal bounds
+        bbox_rough = (mx, final_y, mw, max(1, final_h))
+        
+    else:
+        # Motion detection failed - fallback to original algorithm
+        logger.warning("[MOTION] Motion detection failed, using fallback (crop from text_bottom)")
+        
+        margin = max(int(0.01 * H), 10)
+        crop_top = text_bottom + margin
+        
+        logger.info(f"[CROP] text_bottom={text_bottom}, margin={margin}, crop_top={crop_top}")
+        
+        crop_height = H - crop_top
+        min_crop_h = max(int(0.4 * H), 250)
+        
+        if crop_height < min_crop_h:
+            logger.warning(f"[WARNING] Crop height {crop_height} < min {min_crop_h}")
+            crop_top = H - min_crop_h
+            crop_height = min_crop_h
+            
+            if crop_top <= text_bottom:
+                logger.error(f"[ERROR] Cannot satisfy min height! Using minimal margin.")
+                crop_top = text_bottom + max(int(0.01 * H), 8)
+                crop_height = H - crop_top
+        
+        bbox_rough = (0, crop_top, W, crop_height)
+    
+    # Continue with existing logic for debug visualization
+    x, y, w, h = bbox_rough
     debug_frame = mid_frame_orig.copy()
 
     mask_debug = _text_mask_improved(mid_frame_orig, search_height_ratio=0.65)
