@@ -190,11 +190,20 @@ async def process_video_task(
         if len(frames) < 2:
             raise Exception("Недостаточно кадров для анализа")
 
-        bbox_rough, text_bottom = estimate_crop_box(frames, task_id)
+        bbox_rough, text_bottom, is_motion = estimate_crop_box(frames, task_id)
         x, y, w, h = bbox_rough
 
         mid_frame = frames[len(frames) // 2]
-        cx, cy, cw, ch = refine_crop_rect(mid_frame, x, y, w, h)
+        
+        if is_motion:
+            # Skip refine_crop_rect for motion results to prevent eating static content (graphs)
+            # Motion detection is already restrictive enough.
+            logger.info(f"[TASK {task_id}] Skipping refine_crop_rect for motion result")
+            cx, cy, cw, ch = x, y, w, h
+        else:
+            # Fallback path - use refine to clean up uniform borders
+            cx, cy, cw, ch = refine_crop_rect(mid_frame, x, y, w, h)
+            
         bbox_clean = (cx, cy, cw, ch)
 
         best_frame, quality = select_best_frame(frames, bbox_clean)

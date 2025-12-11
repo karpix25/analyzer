@@ -440,6 +440,7 @@ def estimate_crop_box(frames: List[np.ndarray], task_id: str) -> Tuple[Tuple[int
     if motion_bbox is not None:
         # Motion detection successful - use it for bbox
         mx, my, mw, mh = motion_bbox
+        is_motion = True
         logger.info(f"[MOTION] Using motion-detected bbox: x={mx}, y={my}, w={mw}, h={mh}")
         
         # Combine with text_bottom: crop from text_bottom to motion bbox bottom
@@ -463,6 +464,7 @@ def estimate_crop_box(frames: List[np.ndarray], task_id: str) -> Tuple[Tuple[int
         
     else:
         # Motion detection failed - fallback to original algorithm
+        is_motion = False
         logger.warning("[MOTION] Motion detection failed, using fallback (crop from text_bottom)")
         
         margin = max(int(0.01 * H), 10)
@@ -574,7 +576,7 @@ def estimate_crop_box(frames: List[np.ndarray], task_id: str) -> Tuple[Tuple[int
 
     cv2.imwrite(str(task_result_dir / "debug.jpg"), debug_frame)
 
-    return (0, int(crop_top), W, int(crop_height)), text_bottom
+    return bbox_rough, text_bottom, is_motion
 
 
 # ---- Frame selection & refinement ------------------------------------------
@@ -794,10 +796,10 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     rw = min(rw - trim_l, trim_w)
     rh = min(rh - trim_t, trim_h)
 
-    # Боковые границы: срез не более 15%, низ может срезаться до 40% если он однотонный.
-    max_side_crop_x = int(0.15 * w)
-    max_top_crop = int(0.15 * h)
-    max_bottom_crop = int(0.40 * h)
+    # Боковые границы: срез не более 10%, низ может срезаться до 20%.
+    max_side_crop_x = int(0.10 * w)
+    max_top_crop = int(0.10 * h)
+    max_bottom_crop = int(0.20 * h)
 
     # Ограничиваем слева/справа
     if rx > max_side_crop_x:
