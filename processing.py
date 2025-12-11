@@ -532,7 +532,53 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     rw = min(w - rx, rw + 2 * margin)
     rh = min(h - ry, rh + 2 * margin)
 
-    # Ослабляем ужимание: если ширина/высота контента слишком мала, расширяем или откатываемся.
+    # Дополнительное обрезание однотонных светлых/тёмных полос по краям,
+    # чтобы убирать белые letterbox'ы.
+    def _trim_uniform_edges(gray_roi: np.ndarray, max_ratio: float = 0.25) -> Tuple[int, int, int, int]:
+        r_h, r_w = gray_roi.shape
+        row_mean = gray_roi.mean(axis=1)
+        row_std = gray_roi.std(axis=1)
+        col_mean = gray_roi.mean(axis=0)
+        col_std = gray_roi.std(axis=0)
+
+        std_thresh_row = max(3.0, float(np.percentile(row_std, 15)))
+        std_thresh_col = max(3.0, float(np.percentile(col_std, 15)))
+        bright_thresh = 242.0
+        dark_thresh = 18.0
+
+        def _find_start(arr_mean, arr_std, std_thresh, limit):
+            start = 0
+            while start < limit and arr_std[start] < std_thresh and (arr_mean[start] > bright_thresh or arr_mean[start] < dark_thresh):
+                start += 1
+            return start
+
+        def _find_end(arr_mean, arr_std, std_thresh, limit):
+            end = len(arr_mean)
+            while end > 0 and (len(arr_mean) - end) < limit and arr_std[end - 1] < std_thresh and (arr_mean[end - 1] > bright_thresh or arr_mean[end - 1] < dark_thresh):
+                end -= 1
+            return end
+
+        max_trim_rows = int(r_h * max_ratio)
+        max_trim_cols = int(r_w * max_ratio)
+
+        top = _find_start(row_mean, row_std, std_thresh_row, max_trim_rows)
+        bottom = _find_end(row_mean, row_std, std_thresh_row, max_trim_rows)
+        left = _find_start(col_mean, col_std, std_thresh_col, max_trim_cols)
+        right = _find_end(col_mean, col_std, std_thresh_col, max_trim_cols)
+
+        new_w = max(1, right - left)
+        new_h = max(1, bottom - top)
+        return left, top, new_w, new_h
+
+    gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    trim_l, trim_t, trim_w, trim_h = _trim_uniform_edges(gray_roi)
+
+    rx = rx + trim_l
+    ry = ry + trim_t
+    rw = min(rw - trim_l, trim_w)
+    rh = min(rh - trim_t, trim_h)
+
+    # Лёгкий запас по краям, чтобы не съедать полезный контент.
     pad_x = int(0.02 * w)
     pad_y = int(0.02 * h)
 
@@ -545,13 +591,6 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     final_y = y + ry
     final_w = rw
     final_h = rh
-
-    if final_w < 0.95 * w:
-        final_x = x
-        final_w = w
-    if final_h < 0.90 * h:
-        final_y = y
-        final_h = h
 
     print(f"[AUTOCROP] Original: {w}x{h}, Refined: {final_w}x{final_h} (Removed top={ry}, bottom={h - (ry + rh)}, left={rx}, right={w - (rx + rw)})")
 
