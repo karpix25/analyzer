@@ -573,14 +573,13 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
         return rows_to_trim
     
     # Применяем проверку нижнего края на ИСХОДНОМ ROI
+    # ВАЖНО: НЕ изменяем roi и h, только запоминаем сколько нужно обрезать!
     bottom_trim_pixels = _detect_bottom_uniform_strip(roi)
     if bottom_trim_pixels > 0:
-        logger.info(f"[BOTTOM_STRIP] Detected uniform bottom strip on original ROI: trimming {bottom_trim_pixels}px ({bottom_trim_pixels/h*100:.1f}%)")
-        # Обрезаем ROI снизу перед дальнейшей обработкой
-        roi = roi[:h - bottom_trim_pixels, :]
-        h = h - bottom_trim_pixels # Update h to reflect the trimmed height
+        logger.info(f"[BOTTOM_STRIP] Detected uniform bottom strip: {bottom_trim_pixels}px ({bottom_trim_pixels/h*100:.1f}%)")
     
-    # Теперь применяем background-aware mask на уже обрезанный ROI
+    # Применяем background-aware mask на ИСХОДНОМ ROI
+    # (не обрезаем, чтобы сохранить координаты)
     color_mask = _background_aware_mask(roi)
 
     if cv2.countNonZero(color_mask) < 10:
@@ -590,6 +589,9 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     if not contours:
+        # Если нашли bottom trim, применяем его
+        if bottom_trim_pixels > 0:
+            return x, y, w, max(1, h - bottom_trim_pixels)
         return x, y, w, h
 
     all_points = np.concatenate(contours)
@@ -598,8 +600,8 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     margin = 2
     rx = max(0, rx - margin)
     ry = max(0, ry - margin)
-    rw = min(roi.shape[1] - rx, rw + 2 * margin)
-    rh = min(roi.shape[0] - ry, rh + 2 * margin)
+    rw = min(w - rx, rw + 2 * margin)
+    rh = min(h - ry, rh + 2 * margin)
 
     # Дополнительное обрезание однотонных полос по краям с индивидуальными ограничениями.
     def _trim_uniform_edges(gray_roi: np.ndarray, max_ratio_std: float = 0.18, max_ratio_bottom: float = 0.40) -> Tuple[int, int, int, int]:
@@ -690,8 +692,17 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     final_y = y + ry
     final_w = rw
     final_h = rh
+    
+    # Учитываем обнаруженную нижнюю полосу
+    if bottom_trim_pixels > 0:
+        # Обрезаем снизу: уменьшаем высоту на величину детектированной полосы
+        available_height_from_bottom = h - (ry + rh)  # Сколько уже обрезано снизу
+        additional_bottom_trim = max(0, bottom_trim_pixels - available_height_from_bottom)
+        if additional_bottom_trim > 0:
+            final_h = max(1, final_h - additional_bottom_trim)
+            logger.info(f"[AUTOCROP] Applied additional bottom trim: {additional_bottom_trim}px")
 
-    logger.info(f"[AUTOCROP] Original: {w}x{h}, Refined: {final_w}x{final_h} (Removed top={ry}, bottom={h - (ry + rh)}, left={rx}, right={w - (rx + rw)})")
+    logger.info(f"[AUTOCROP] Original: {w}x{h}, Refined: {final_w}x{final_h} (Removed top={ry}, bottom={h - (ry + final_h)}, left={rx}, right={w - (rx + rw)})")
 
     return final_x, final_y, final_w, final_h
 
