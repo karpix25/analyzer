@@ -457,6 +457,10 @@ def estimate_crop_box(frames: List[np.ndarray], task_id: str) -> Tuple[Tuple[int
         # Use motion bbox for horizontal bounds
         bbox_rough = (mx, final_y, mw, max(1, final_h))
         
+        # For debug visualization compatibility
+        crop_top = final_y
+        crop_height = final_h
+        
     else:
         # Motion detection failed - fallback to original algorithm
         logger.warning("[MOTION] Motion detection failed, using fallback (crop from text_bottom)")
