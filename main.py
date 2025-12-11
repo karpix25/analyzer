@@ -193,10 +193,13 @@ async def process_video_task(
         bbox_rough, text_bottom, is_motion = estimate_crop_box(frames, task_id)
         x, y, w, h = bbox_rough
 
-        mid_frame = frames[len(frames) // 2]
+        # Calculate median frame to isolate static background and remove dynamic noise
+        # This makes clean_crop much more robust for detecting uniform backgrounds
+        frames_arr = np.array(frames)
+        median_frame = np.median(frames_arr, axis=0).astype(np.uint8)
         
-        # Always run refine for cleanup, but limits are now safer (10% side, 20% bottom)
-        cx, cy, cw, ch = refine_crop_rect(mid_frame, x, y, w, h)
+        # Run refine logic on the MEDIAN frame
+        cx, cy, cw, ch = refine_crop_rect(median_frame, x, y, w, h)
             
         bbox_clean = (cx, cy, cw, ch)
 
