@@ -252,12 +252,13 @@ def get_text_bottom_from_contours(frame: np.ndarray) -> Tuple[Optional[int], Lis
         y2 = min(H, y + h + pad)
 
         roi = frame[y1:y2, x1:x2]
+        img_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
 
         try:
-            results = reader.readtext(roi, detail=0, paragraph=True)
+            results = READER.readtext(img_gray, detail=1, paragraph=False)
 
             if results:
-                text_content = " ".join(results).strip()
+                text_content = " ".join([res[1] for res in results]).strip() # Extract text from detailed results
                 if len(text_content) > 1:
                     logger.debug(f"[OCR] Found text at y={y}: '{text_content}'")
                     valid_contours.append((x, y, w, h))
