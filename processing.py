@@ -532,39 +532,39 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     rw = min(w - rx, rw + 2 * margin)
     rh = min(h - ry, rh + 2 * margin)
 
-    # Дополнительное обрезание однотонных светлых/тёмных полос по краям,
-    # чтобы убирать белые letterbox'ы.
-    def _trim_uniform_edges(gray_roi: np.ndarray, max_ratio: float = 0.15) -> Tuple[int, int, int, int]:
+    # Дополнительное обрезание однотонных полос по краям с индивидуальными ограничениями.
+    def _trim_uniform_edges(gray_roi: np.ndarray, max_ratio_std: float = 0.18) -> Tuple[int, int, int, int]:
+        """Возвращает (left, top, width, height) после среза однотонных полос."""
         r_h, r_w = gray_roi.shape
         row_mean = gray_roi.mean(axis=1)
         row_std = gray_roi.std(axis=1)
         col_mean = gray_roi.mean(axis=0)
         col_std = gray_roi.std(axis=0)
 
-        std_thresh_row = max(3.0, float(np.percentile(row_std, 15)))
-        std_thresh_col = max(3.0, float(np.percentile(col_std, 15)))
+        std_thresh_row = max(3.0, float(np.percentile(row_std, 20)))
+        std_thresh_col = max(3.0, float(np.percentile(col_std, 20)))
         bright_thresh = 242.0
         dark_thresh = 18.0
 
-        def _find_start(arr_mean, arr_std, std_thresh, limit):
-            start = 0
-            while start < limit and arr_std[start] < std_thresh and (arr_mean[start] > bright_thresh or arr_mean[start] < dark_thresh):
-                start += 1
-            return start
+        max_trim_rows_std = int(r_h * max_ratio_std)
+        max_trim_cols_std = int(r_w * max_ratio_std)
 
-        def _find_end(arr_mean, arr_std, std_thresh, limit):
-            end = len(arr_mean)
-            while end > 0 and (len(arr_mean) - end) < limit and arr_std[end - 1] < std_thresh and (arr_mean[end - 1] > bright_thresh or arr_mean[end - 1] < dark_thresh):
-                end -= 1
-            return end
+        def _scan_forward(arr_mean, arr_std, std_thresh, limit):
+            idx = 0
+            while idx < limit and arr_std[idx] < std_thresh and (arr_mean[idx] > bright_thresh or arr_mean[idx] < dark_thresh):
+                idx += 1
+            return idx
 
-        max_trim_rows = int(r_h * max_ratio)
-        max_trim_cols = int(r_w * max_ratio)
+        def _scan_backward(arr_mean, arr_std, std_thresh, limit):
+            idx = len(arr_mean)
+            while idx > 0 and (len(arr_mean) - idx) < limit and arr_std[idx - 1] < std_thresh and (arr_mean[idx - 1] > bright_thresh or arr_mean[idx - 1] < dark_thresh):
+                idx -= 1
+            return idx
 
-        top = _find_start(row_mean, row_std, std_thresh_row, max_trim_rows)
-        bottom = _find_end(row_mean, row_std, std_thresh_row, max_trim_rows)
-        left = _find_start(col_mean, col_std, std_thresh_col, max_trim_cols)
-        right = _find_end(col_mean, col_std, std_thresh_col, max_trim_cols)
+        top = _scan_forward(row_mean, row_std, std_thresh_row, max_trim_rows_std)
+        bottom = _scan_backward(row_mean, row_std, std_thresh_row, max_trim_rows_std)
+        left = _scan_forward(col_mean, col_std, std_thresh_col, max_trim_cols_std)
+        right = _scan_backward(col_mean, col_std, std_thresh_col, max_trim_cols_std)
 
         new_w = max(1, right - left)
         new_h = max(1, bottom - top)
@@ -578,30 +578,30 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     rw = min(rw - trim_l, trim_w)
     rh = min(rh - trim_t, trim_h)
 
-    # Не режем больше 12% с каждой стороны, чтобы не съедать полезный контент.
-    max_side_crop_x = int(0.12 * w)
-    max_side_crop_y = int(0.12 * h)
+    # Боковые границы: срез не более 15%, низ может срезаться до 25% если он однотонный.
+    max_side_crop_x = int(0.15 * w)
+    max_top_crop = int(0.15 * h)
+    max_bottom_crop = int(0.25 * h)
 
-    # Ограничиваем обрезку слева
+    # Ограничиваем слева/справа
     if rx > max_side_crop_x:
         overshoot = rx - max_side_crop_x
         rx = max_side_crop_x
         rw = max(1, rw + overshoot)
-    # Ограничиваем обрезку справа
     right_cut = w - (rx + rw)
     if right_cut > max_side_crop_x:
         excess = right_cut - max_side_crop_x
         rw = max(1, rw + excess)
 
-    # Ограничиваем обрезку сверху
-    if ry > max_side_crop_y:
-        overshoot = ry - max_side_crop_y
-        ry = max_side_crop_y
+    # Ограничиваем сверху
+    if ry > max_top_crop:
+        overshoot = ry - max_top_crop
+        ry = max_top_crop
         rh = max(1, rh + overshoot)
-    # Ограничиваем обрезку снизу
+    # Ограничиваем снизу (но даём больше свободы)
     bottom_cut = h - (ry + rh)
-    if bottom_cut > max_side_crop_y:
-        excess = bottom_cut - max_side_crop_y
+    if bottom_cut > max_bottom_crop:
+        excess = bottom_cut - max_bottom_crop
         rh = max(1, rh + excess)
 
     # Лёгкий запас по краям, чтобы не съедать полезный контент.
