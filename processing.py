@@ -490,23 +490,24 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
 
         # Уменьшаем edge для лучшей детекции тонких полос
         edge = max(1, int(0.04 * min(h_roi, w_roi)))
-        # Для нижнего края используем ещё меньший размер
-        bottom_edge = max(1, int(0.02 * h_roi))
         
+        # КРИТИЧНО: НЕ используем нижний край для определения фона!
+        # Большие цветные полосы снизу (оранжевые, черные) искажают медиану
+        # Используем только верх и бока
         edges = [
-            lab[:edge, :, :],
-            lab[h_roi - bottom_edge :, :, :],  # Используем меньший размер для низа
-            lab[:, :edge, :],
-            lab[:, w_roi - edge :, :],
+            lab[:edge, :, :],          # Верх
+            lab[:, :edge, :],          # Левая сторона
+            lab[:, w_roi - edge :, :], # Правая сторона
         ]
         edges_stack = np.concatenate([e.reshape(-1, 3) for e in edges], axis=0)
         bg_color = np.median(edges_stack, axis=0)
 
         dist = np.linalg.norm(lab.astype(np.float32) - bg_color.astype(np.float32), axis=2)
+        
+        # Для порога используем только верх и бока
         dist_edges = np.concatenate(
             [
                 dist[:edge, :].ravel(),
-                dist[h_roi - bottom_edge :, :].ravel(),
                 dist[:, :edge].ravel(),
                 dist[:, w_roi - edge :].ravel(),
             ]
@@ -521,6 +522,65 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
         return mask
 
+    # КРИТИЧНО: Проверяем нижний край ДО расчета bounding rect
+    # Это позволяет обнаружить большие цветные полосы снизу
+    def _detect_bottom_uniform_strip(bgr_roi: np.ndarray) -> int:
+        """Определяет, сколько пикселей снизу нужно обрезать из-за однотонной полосы."""
+        h_check, w_check = bgr_roi.shape[:2]
+        if h_check < 20:
+            return 0
+        
+        # Анализируем нижние 25% кадра (увеличено с 15%)
+        bottom_zone_height = max(15, int(h_check * 0.25))
+        bottom_zone = bgr_roi[h_check - bottom_zone_height:, :]
+        
+        # Конвертируем в LAB для лучшего анализа цвета
+        lab_bottom = cv2.cvtColor(bottom_zone, cv2.COLOR_BGR2LAB)
+        gray_bottom = cv2.cvtColor(bottom_zone, cv2.COLOR_BGR2GRAY)
+        
+        # Анализируем каждую строку снизу вверх
+        rows_to_trim = 0
+        max_trim = int(h_check * 0.45)  # Максимум 45% можно обрезать (увеличено)
+        
+        for i in range(bottom_zone_height - 1, -1, -1):
+            row_lab = lab_bottom[i, :, :]
+            row_gray = gray_bottom[i, :]
+            
+            # Проверяем однородность строки
+            std_lab = np.std(row_lab, axis=0).mean()  # Средняя std по всем каналам LAB
+            std_gray = np.std(row_gray)
+            mean_gray = np.mean(row_gray)
+            
+            # Строка считается однотонной если:
+            # Более мягкие критерии для лучшей детекции
+            is_uniform = (std_lab < 10.0 and std_gray < 6.0 and 
+                         (mean_gray < 35 or mean_gray > 215 or 
+                          (mean_gray > 70 and mean_gray < 190 and std_gray < 4.0)))
+            
+            if is_uniform:
+                rows_to_trim += 1
+                if rows_to_trim >= max_trim:
+                    break
+            else:
+                # Если нашли неоднородную строку, останавливаемся
+                # Даём запас только если уже нашли достаточно
+                if rows_to_trim > 5:
+                    rows_to_trim -= 3
+                elif rows_to_trim > 0:
+                    rows_to_trim = 0
+                break
+        
+        return rows_to_trim
+    
+    # Применяем проверку нижнего края на ИСХОДНОМ ROI
+    bottom_trim_pixels = _detect_bottom_uniform_strip(roi)
+    if bottom_trim_pixels > 0:
+        logger.info(f"[BOTTOM_STRIP] Detected uniform bottom strip on original ROI: trimming {bottom_trim_pixels}px ({bottom_trim_pixels/h*100:.1f}%)")
+        # Обрезаем ROI снизу перед дальнейшей обработкой
+        roi = roi[:h - bottom_trim_pixels, :]
+        h = h - bottom_trim_pixels # Update h to reflect the trimmed height
+    
+    # Теперь применяем background-aware mask на уже обрезанный ROI
     color_mask = _background_aware_mask(roi)
 
     if cv2.countNonZero(color_mask) < 10:
@@ -538,63 +598,8 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     margin = 2
     rx = max(0, rx - margin)
     ry = max(0, ry - margin)
-    rw = min(w - rx, rw + 2 * margin)
-    rh = min(h - ry, rh + 2 * margin)
-
-    # Дополнительная агрессивная проверка нижнего края для удаления однотонных полос
-    def _detect_bottom_uniform_strip(bgr_roi: np.ndarray, current_h: int) -> int:
-        """Определяет, сколько пикселей снизу нужно обрезать из-за однотонной полосы."""
-        h_check, w_check = bgr_roi.shape[:2]
-        if h_check < 20:
-            return 0
-        
-        # Анализируем нижние 15% кадра
-        bottom_zone_height = max(10, int(h_check * 0.15))
-        bottom_zone = bgr_roi[h_check - bottom_zone_height:, :]
-        
-        # Конвертируем в LAB для лучшего анализа цвета
-        lab_bottom = cv2.cvtColor(bottom_zone, cv2.COLOR_BGR2LAB)
-        gray_bottom = cv2.cvtColor(bottom_zone, cv2.COLOR_BGR2GRAY)
-        
-        # Анализируем каждую строку снизу вверх
-        rows_to_trim = 0
-        max_trim = int(h_check * 0.40)  # Максимум 40% можно обрезать
-        
-        for i in range(bottom_zone_height - 1, -1, -1):
-            row_lab = lab_bottom[i, :, :]
-            row_gray = gray_bottom[i, :]
-            
-            # Проверяем однородность строки
-            std_lab = np.std(row_lab, axis=0).mean()  # Средняя std по всем каналам LAB
-            std_gray = np.std(row_gray)
-            mean_gray = np.mean(row_gray)
-            
-            # Строка считается однотонной если:
-            # 1. Низкая вариация в LAB (std < 8)
-            # 2. Низкая вариация в gray (std < 5)
-            # 3. Средняя яркость либо очень темная (<30) либо очень светлая (>220)
-            is_uniform = (std_lab < 8.0 and std_gray < 5.0 and 
-                         (mean_gray < 30 or mean_gray > 220 or 
-                          (mean_gray > 80 and mean_gray < 180 and std_gray < 3.0)))
-            
-            if is_uniform:
-                rows_to_trim += 1
-                if rows_to_trim >= max_trim:
-                    break
-            else:
-                # Если нашли неоднородную строку, останавливаемся
-                # (но даём небольшой запас - 2 строки)
-                if rows_to_trim > 2:
-                    rows_to_trim -= 2
-                break
-        
-        return rows_to_trim
-    
-    # Применяем дополнительную проверку нижнего края
-    bottom_trim = _detect_bottom_uniform_strip(roi[ry:ry+rh, rx:rx+rw], rh)
-    if bottom_trim > 0:
-        logger.info(f"[BOTTOM_STRIP] Detected uniform bottom strip: trimming {bottom_trim}px")
-        rh = max(1, rh - bottom_trim)
+    rw = min(roi.shape[1] - rx, rw + 2 * margin)
+    rh = min(roi.shape[0] - ry, rh + 2 * margin)
 
     # Дополнительное обрезание однотонных полос по краям с индивидуальными ограничениями.
     def _trim_uniform_edges(gray_roi: np.ndarray, max_ratio_std: float = 0.18, max_ratio_bottom: float = 0.40) -> Tuple[int, int, int, int]:
