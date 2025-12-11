@@ -1,6 +1,8 @@
 import asyncio
 import json
+import logging
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -25,6 +27,19 @@ from storage import (
     save_task_info,
     update_task_fields,
 )
+
+# -----------------------------------------------------------------------------
+# Logging: force stdout handler so logs видны в Docker/Easypanel
+# -----------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+    force=True,
+)
+for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    logging.getLogger(name).setLevel(logging.INFO)
+logger = logging.getLogger("app")
 
 # ---------------------------------
 # App & CORS
