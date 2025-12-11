@@ -503,10 +503,39 @@ async def root():
 
 
 @app.get("/tasks")
-async def list_tasks_endpoint():
+async def list_tasks():
     """Список всех задач."""
     tasks = await list_all_tasks()
-    return {
+    return {"tasks": tasks}
+
+
+@app.get("/debug/tasks")
+async def debug_tasks():
+    """Debug endpoint to check all task statuses."""
+    tasks = await list_all_tasks()
+    
+    stats = {
         "total": len(tasks),
-        "tasks": tasks,
+        "pending": 0,
+        "processing": 0,
+        "completed": 0,
+        "failed": 0,
+    }
+    
+    task_details = []
+    for task in tasks:
+        status = task.get("status", "unknown")
+        stats[status] = stats.get(status, 0) + 1
+        
+        task_details.append({
+            "task_id": task.get("task_id"),
+            "status": status,
+            "created_at": task.get("created_at"),
+            "completed_at": task.get("completed_at"),
+            "error": task.get("error"),
+        })
+    
+    return {
+        "stats": stats,
+        "tasks": task_details,
     }
