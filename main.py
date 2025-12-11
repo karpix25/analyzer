@@ -75,18 +75,18 @@ async def worker_loop(worker_id: int) -> None:
         except asyncio.CancelledError:
             break
         except Exception as e:
-            print(f"[WORKER {worker_id}] Failed to fetch job: {e}")
+            logger.error(f"[WORKER {worker_id}] Failed to fetch job: {e}")
             await asyncio.sleep(1.0)
             continue
 
         video_path: Optional[Path] = None
 
         try:
-            print(f"[WORKER {worker_id}] Picked task {job.task_id} ({job.source})")
+            logger.info(f"[WORKER {worker_id}] Picked task {job.task_id} ({job.source})")
 
             task_info = await get_task_info(job.task_id)
             if task_info is None:
-                print(f"[WORKER {worker_id}] Task {job.task_id} not found in storage")
+                logger.warning(f"[WORKER {worker_id}] Task {job.task_id} not found in storage")
                 continue
 
             await update_task_fields(job.task_id, status=TaskStatus.PROCESSING, error=None, result=None)
@@ -95,13 +95,13 @@ async def worker_loop(worker_id: int) -> None:
                 if not job.video_url:
                     raise ValueError("Video URL is required for url job")
 
-                print(f"[TASK {job.task_id}] Starting download from URL")
+                logger.info(f"[TASK {job.task_id}] Starting download from URL")
                 try:
                     video_path = await download_video_from_url(job.video_url)
-                    print(f"[TASK {job.task_id}] Download completed: {video_path}")
+                    logger.info(f"[TASK {job.task_id}] Download completed: {video_path}")
                 except Exception as e:
                     error_msg = f"Download failed: {str(e)}"
-                    print(f"[TASK {job.task_id}] {error_msg}")
+                    logger.error(f"[TASK {job.task_id}] {error_msg}")
                     await update_task_fields(
                         job.task_id,
                         status=TaskStatus.FAILED,
@@ -123,7 +123,7 @@ async def worker_loop(worker_id: int) -> None:
             raise
         except Exception as e:
             error_msg = f"Worker error: {type(e).__name__}: {str(e)}"
-            print(f"[WORKER {worker_id}] {error_msg}")
+            logger.error(f"[WORKER {worker_id}] {error_msg}")
             task_info = await get_task_info(job.task_id)
             if task_info:
                 await update_task_fields(
@@ -136,7 +136,7 @@ async def worker_loop(worker_id: int) -> None:
                 if job.webhook_url:
                     await send_webhook(job.webhook_url, job.task_id, None, job.callback_data, error=error_msg)
 
-    print(f"[WORKER {worker_id}] Stopped")
+    logger.info(f"[WORKER {worker_id}] Stopped")
 
 
 @app.on_event("startup")
@@ -145,7 +145,7 @@ async def app_startup() -> None:
     global worker_tasks
     await init_redis()
     worker_tasks = [asyncio.create_task(worker_loop(idx + 1)) for idx in range(max(1, WORKER_CONCURRENCY))]
-    print(f"[STARTUP] Created {len(worker_tasks)} worker(s)")
+    logger.info(f"[STARTUP] Created {len(worker_tasks)} worker(s)")
 
 
 @app.on_event("shutdown")
@@ -172,7 +172,7 @@ async def process_video_task(
     callback_data: Optional[Dict[str, Any]],
 ):
     """Фоновая задача обработки видео."""
-    print(f"[TASK {task_id}] Started processing")
+    logger.info(f"[TASK {task_id}] Started processing")
 
     await update_task_fields(task_id, status=TaskStatus.PROCESSING, error=None, result=None)
 
@@ -229,13 +229,13 @@ async def process_video_task(
             error=None,
         )
 
-        print(f"[TASK {task_id}] Completed successfully")
+        logger.info(f"[TASK {task_id}] Completed successfully")
 
         if webhook_url:
             await send_webhook(webhook_url, task_id, result, callback_data)
 
     except Exception as e:
-        print(f"[TASK {task_id}] Failed: {str(e)}")
+        logger.error(f"[TASK {task_id}] Failed: {str(e)}")
         await update_task_fields(
             task_id,
             status=TaskStatus.FAILED,
@@ -257,7 +257,7 @@ async def process_video_task(
 async def send_webhook(webhook_url: str, task_id: str, result: Optional[Dict], callback_data: Optional[Dict], error: Optional[str] = None):
     """Отправляет webhook с результатом."""
     if not webhook_url:
-        print(f"[WEBHOOK] Skipping for task {task_id} - no webhook_url provided")
+        logger.info(f"[WEBHOOK] Skipping for task {task_id} - no webhook_url provided")
         return
 
     payload = {
@@ -272,24 +272,24 @@ async def send_webhook(webhook_url: str, task_id: str, result: Optional[Dict], c
     else:
         payload["error"] = error
 
-    print(f"[WEBHOOK] Sending to {webhook_url} for task {task_id}")
-    print(f"[WEBHOOK] Payload keys: {list(payload.keys())}")
+    logger.info(f"[WEBHOOK] Sending to {webhook_url} for task {task_id}")
+    logger.debug(f"[WEBHOOK] Payload keys: {list(payload.keys())}")
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(webhook_url, json=payload, timeout=10.0)
-            print(f"[WEBHOOK] Response status: {response.status_code}")
-            print(f"[WEBHOOK] Response headers: {dict(response.headers)}")
-            print(f"[WEBHOOK] Response body: {response.text[:200]}")
+            logger.info(f"[WEBHOOK] Response status: {response.status_code}")
+            logger.debug(f"[WEBHOOK] Response headers: {dict(response.headers)}")
+            logger.debug(f"[WEBHOOK] Response body: {response.text[:200]}")
     except httpx.TimeoutException:
-        print(f"[WEBHOOK] Timeout sending to {webhook_url}")
+        logger.error(f"[WEBHOOK] Timeout sending to {webhook_url}")
     except httpx.RequestError as e:
-        print(f"[WEBHOOK] Request error: {type(e).__name__}: {str(e)}")
+        logger.error(f"[WEBHOOK] Request error: {type(e).__name__}: {str(e)}")
     except Exception as e:
-        print(f"[WEBHOOK] Unexpected error: {type(e).__name__}: {str(e)}")
+        logger.error(f"[WEBHOOK] Unexpected error: {type(e).__name__}: {str(e)}")
         import traceback
 
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
 
 
 async def download_video_from_url(url: str) -> Path:
@@ -361,7 +361,7 @@ async def detect_video_multipart(
     )
     await save_task_info(task_info)
 
-    print(f"[TASK {task_id}] Created with webhook_url: {webhook_url}")
+    logger.info(f"[TASK {task_id}] Created with webhook_url: {webhook_url}")
 
     job = ProcessingJob(
         task_id=task_id,
@@ -372,7 +372,7 @@ async def detect_video_multipart(
     )
 
     await enqueue_job(job)
-    print(f"[TASK {task_id}] Enqueued for processing (upload)")
+    logger.info(f"[TASK {task_id}] Enqueued for processing (upload)")
 
     return JSONResponse(
         {
@@ -403,7 +403,7 @@ async def detect_video_url(
     )
     await save_task_info(task_info)
 
-    print(f"[TASK {task_id}] Created with webhook_url: {webhook_url_str}")
+    logger.info(f"[TASK {task_id}] Created with webhook_url: {webhook_url_str}")
 
     job = ProcessingJob(
         task_id=task_id,
@@ -414,7 +414,7 @@ async def detect_video_url(
     )
 
     await enqueue_job(job)
-    print(f"[TASK {task_id}] Enqueued for processing (url)")
+    logger.info(f"[TASK {task_id}] Enqueued for processing (url)")
 
     return JSONResponse(
         {
