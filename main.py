@@ -514,8 +514,15 @@ async def debug_tasks():
     try:
         tasks = await list_all_tasks()
         
+        # Sort by created_at (newest first)
+        tasks_sorted = sorted(
+            tasks, 
+            key=lambda t: t.created_at if hasattr(t, 'created_at') and t.created_at else "", 
+            reverse=True
+        )
+        
         stats = {
-            "total": len(tasks),
+            "total": len(tasks_sorted),
             "pending": 0,
             "processing": 0,
             "completed": 0,
@@ -523,7 +530,7 @@ async def debug_tasks():
         }
         
         task_details = []
-        for task in tasks:
+        for task in tasks_sorted:
             # TaskInfo is a Pydantic model, use attributes directly
             status = task.status if hasattr(task, 'status') else "unknown"
             if status in stats:
@@ -531,12 +538,25 @@ async def debug_tasks():
             else:
                 stats[status] = 1
             
+            # Extract result details if available
+            result_info = None
+            if hasattr(task, 'result') and task.result:
+                result_info = {
+                    "files": task.result.get("files", {}),
+                    "crop_info": {
+                        "text_bottom": task.result.get("text_bottom"),
+                        "content_bbox": task.result.get("content_bbox"),
+                        "clean_bbox": task.result.get("clean_bbox"),
+                    }
+                }
+            
             task_details.append({
                 "task_id": task.task_id if hasattr(task, 'task_id') else None,
                 "status": status,
                 "created_at": task.created_at if hasattr(task, 'created_at') else None,
                 "completed_at": task.completed_at if hasattr(task, 'completed_at') else None,
                 "error": task.error if hasattr(task, 'error') else None,
+                "result": result_info,
             })
         
         return {
