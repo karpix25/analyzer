@@ -2,6 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Без буфера, чтобы логи print сразу уходили в stdout/stderr (easypanel их забирает)
+ENV PYTHONUNBUFFERED=1
+
 # Системные зависимости для OpenCV
 RUN apt-get update && apt-get install -y \
     ffmpeg \
