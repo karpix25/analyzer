@@ -1,7 +1,8 @@
 import subprocess
 import logging
+import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -12,10 +13,15 @@ from config import RESULT_DIR
 # Инициализируем логгер
 logger = logging.getLogger("app.processing")
 
-# Инициализируем EasyOCR один раз
+# Initialize EasyOCR with model storage directory
 logger.info("[INIT] Loading EasyOCR model...")
-reader = easyocr.Reader(["en", "ru"], gpu=False)
-logger.info("[INIT] EasyOCR model loaded.")
+READER = easyocr.Reader(
+    ['en', 'ru'],
+    gpu=False,
+    model_storage_directory=os.getenv('EASYOCR_MODULE_PATH', '/app/.EasyOCR'),
+    download_enabled=False  # Don't download, use pre-downloaded models
+)
+logger.info("[INIT] EasyOCR model loaded")
 
 
 # ---- Frame sampling ---------------------------------------------------------

@@ -5,6 +5,9 @@ WORKDIR /app
 # Без буфера, чтобы логи print сразу уходили в stdout/stderr (easypanel их забирает)
 ENV PYTHONUNBUFFERED=1
 
+# EasyOCR model directory - сохраняем модели в образе
+ENV EASYOCR_MODULE_PATH=/app/.EasyOCR
+
 # Системные зависимости для OpenCV
 RUN apt-get update && apt-get install -y \
     ffmpeg \
@@ -17,6 +20,9 @@ RUN apt-get update && apt-get install -y \
 # Python зависимости
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Pre-download EasyOCR models during build
+RUN python -c "import easyocr; reader = easyocr.Reader(['en', 'ru'], gpu=False, model_storage_directory='/app/.EasyOCR', download_enabled=True)"
 
 COPY . .
 
