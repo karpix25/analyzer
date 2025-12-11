@@ -530,8 +530,8 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
         if h_check < 20:
             return 0
         
-        # Анализируем нижние 25% кадра (увеличено с 15%)
-        bottom_zone_height = max(15, int(h_check * 0.25))
+        # Анализируем нижние 30% кадра (увеличено для лучшего покрытия)
+        bottom_zone_height = max(20, int(h_check * 0.30))
         bottom_zone = bgr_roi[h_check - bottom_zone_height:, :]
         
         # Конвертируем в LAB для лучшего анализа цвета
@@ -540,32 +540,49 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
         
         # Анализируем каждую строку снизу вверх
         rows_to_trim = 0
-        max_trim = int(h_check * 0.45)  # Максимум 45% можно обрезать (увеличено)
+        max_trim = int(h_check * 0.50)  # Максимум 50% можно обрезать
         
         for i in range(bottom_zone_height - 1, -1, -1):
             row_lab = lab_bottom[i, :, :]
             row_gray = gray_bottom[i, :]
             
-            # Проверяем однородность строки
-            std_lab = np.std(row_lab, axis=0).mean()  # Средняя std по всем каналам LAB
-            std_gray = np.std(row_gray)
-            mean_gray = np.mean(row_gray)
+            # НОВЫЙ ПОДХОД: Анализируем пиксели, а не всю строку
+            # Определяем доминирующий цвет строки
+            median_lab = np.median(row_lab, axis=0)
+            median_gray = np.median(row_gray)
             
-            # Строка считается однотонной если:
-            # Более мягкие критерии для лучшей детекции
-            is_uniform = (std_lab < 10.0 and std_gray < 6.0 and 
-                         (mean_gray < 35 or mean_gray > 215 or 
-                          (mean_gray > 70 and mean_gray < 190 and std_gray < 4.0)))
+            # Считаем сколько пикселей близки к доминирующему цвету
+            dist_from_median_lab = np.linalg.norm(row_lab.astype(np.float32) - median_lab.astype(np.float32), axis=1)
+            dist_from_median_gray = np.abs(row_gray.astype(np.float32) - median_gray)
             
-            if is_uniform:
+            # Пиксель считается "однотонным" если он близок к медиане
+            uniform_pixels_lab = dist_from_median_lab < 15.0  # Порог в LAB пространстве
+            uniform_pixels_gray = dist_from_median_gray < 10.0  # Порог в grayscale
+            
+            # Комбинируем: пиксель однотонный если оба условия выполнены
+            uniform_pixels = uniform_pixels_lab & uniform_pixels_gray
+            uniform_ratio = np.sum(uniform_pixels) / len(uniform_pixels)
+            
+            # Строка считается фоном если:
+            # 1. 75%+ пикселей однотонные (позволяет иметь логотипы/текст)
+            # 2. Медианный цвет либо темный, светлый, или средний тон
+            is_background = (
+                uniform_ratio >= 0.75 and
+                (median_gray < 40 or median_gray > 210 or 
+                 (median_gray > 60 and median_gray < 200))
+            )
+            
+            if is_background:
                 rows_to_trim += 1
                 if rows_to_trim >= max_trim:
                     break
             else:
                 # Если нашли неоднородную строку, останавливаемся
                 # Даём запас только если уже нашли достаточно
-                if rows_to_trim > 5:
-                    rows_to_trim -= 3
+                if rows_to_trim > 10:
+                    rows_to_trim -= 5  # Больше запаса для больших полос
+                elif rows_to_trim > 5:
+                    rows_to_trim -= 2
                 elif rows_to_trim > 0:
                     rows_to_trim = 0
                 break
