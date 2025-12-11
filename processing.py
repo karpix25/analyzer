@@ -488,10 +488,14 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
         h_roi, w_roi = bgr.shape[:2]
         lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
 
-        edge = max(1, int(0.06 * min(h_roi, w_roi)))
+        # Уменьшаем edge для лучшей детекции тонких полос
+        edge = max(1, int(0.04 * min(h_roi, w_roi)))
+        # Для нижнего края используем ещё меньший размер
+        bottom_edge = max(1, int(0.02 * h_roi))
+        
         edges = [
             lab[:edge, :, :],
-            lab[h_roi - edge :, :, :],
+            lab[h_roi - bottom_edge :, :, :],  # Используем меньший размер для низа
             lab[:, :edge, :],
             lab[:, w_roi - edge :, :],
         ]
@@ -502,13 +506,14 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
         dist_edges = np.concatenate(
             [
                 dist[:edge, :].ravel(),
-                dist[h_roi - edge :, :].ravel(),
+                dist[h_roi - bottom_edge :, :].ravel(),
                 dist[:, :edge].ravel(),
                 dist[:, w_roi - edge :].ravel(),
             ]
         )
         edge_threshold = float(np.percentile(dist_edges, 95)) if dist_edges.size else 0.0
-        threshold = max(8.0, edge_threshold * 1.2)
+        # Более агрессивный порог для лучшей детекции
+        threshold = max(6.0, edge_threshold * 1.0)
 
         mask = (dist > threshold).astype(np.uint8) * 255
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
@@ -537,7 +542,7 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     rh = min(h - ry, rh + 2 * margin)
 
     # Дополнительное обрезание однотонных полос по краям с индивидуальными ограничениями.
-    def _trim_uniform_edges(gray_roi: np.ndarray, max_ratio_std: float = 0.18, max_ratio_bottom: float = 0.35) -> Tuple[int, int, int, int]:
+    def _trim_uniform_edges(gray_roi: np.ndarray, max_ratio_std: float = 0.18, max_ratio_bottom: float = 0.40) -> Tuple[int, int, int, int]:
         """Возвращает (left, top, width, height) после среза однотонных полос."""
         r_h, r_w = gray_roi.shape
         row_mean = gray_roi.mean(axis=1)
@@ -545,11 +550,11 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
         col_mean = gray_roi.mean(axis=0)
         col_std = gray_roi.std(axis=0)
 
-        # Более агрессивные пороги для детекции однотонных полос
-        std_thresh_row = max(2.5, float(np.percentile(row_std, 15)))
-        std_thresh_col = max(2.5, float(np.percentile(col_std, 15)))
+        # Более агрессивные пороги для детекции однотонных полос (особенно тонких)
+        std_thresh_row = max(2.0, float(np.percentile(row_std, 10)))
+        std_thresh_col = max(2.0, float(np.percentile(col_std, 10)))
         bright_thresh = 242.0
-        dark_thresh = 18.0
+        dark_thresh = 20.0
 
         max_trim_rows_std = int(r_h * max_ratio_std)
         max_trim_cols_std = int(r_w * max_ratio_std)
@@ -586,10 +591,10 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     rw = min(rw - trim_l, trim_w)
     rh = min(rh - trim_t, trim_h)
 
-    # Боковые границы: срез не более 15%, низ может срезаться до 35% если он однотонный.
+    # Боковые границы: срез не более 15%, низ может срезаться до 40% если он однотонный.
     max_side_crop_x = int(0.15 * w)
     max_top_crop = int(0.15 * h)
-    max_bottom_crop = int(0.35 * h)
+    max_bottom_crop = int(0.40 * h)
 
     # Ограничиваем слева/справа
     if rx > max_side_crop_x:
