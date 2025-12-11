@@ -545,8 +545,8 @@ async def debug_tasks():
                     "files": task.result.get("files", {}),
                     "crop_info": {
                         "text_bottom": task.result.get("text_bottom"),
-                        "content_bbox": task.result.get("content_bbox"),
-                        "clean_bbox": task.result.get("clean_bbox"),
+                        "content_bbox": task.result.get("box"),
+                        "clean_bbox": task.result.get("clean_box"),
                     }
                 }
             
