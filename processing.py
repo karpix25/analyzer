@@ -1,4 +1,5 @@
 import subprocess
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -8,10 +9,13 @@ import easyocr
 
 from config import RESULT_DIR
 
+# Инициализируем логгер
+logger = logging.getLogger("app.processing")
+
 # Инициализируем EasyOCR один раз
-print("[INIT] Loading EasyOCR model...")
+logger.info("[INIT] Loading EasyOCR model...")
 reader = easyocr.Reader(["en", "ru"], gpu=False)
-print("[INIT] EasyOCR model loaded.")
+logger.info("[INIT] EasyOCR model loaded.")
 
 
 # ---- Frame sampling ---------------------------------------------------------
@@ -201,7 +205,7 @@ def _find_main_text_region(density: np.ndarray, count: np.ndarray, strip_height:
     region_start_px = region_start_strip * strip_height
     region_end_px = min((region_end_strip + 1) * strip_height, H)
 
-    print(f"[DENSITY] Found main text region: strips {region_start_strip}-{region_end_strip}, px {region_start_px}-{region_end_px}")
+    logger.debug(f"[DENSITY] Found main text region: strips {region_start_strip}-{region_end_strip}, px {region_start_px}-{region_end_px}")
 
     return region_start_px, region_end_px
 
@@ -232,7 +236,7 @@ def get_text_bottom_from_contours(frame: np.ndarray) -> Tuple[Optional[int], Lis
     valid_contours = []
     max_bottom = 0
 
-    print(f"[OCR] Checking {len(candidates)} candidates...")
+    logger.info(f"[OCR] Checking {len(candidates)} candidates...")
 
     for (x, y, w, h) in candidates:
         pad = 5
@@ -249,16 +253,16 @@ def get_text_bottom_from_contours(frame: np.ndarray) -> Tuple[Optional[int], Lis
             if results:
                 text_content = " ".join(results).strip()
                 if len(text_content) > 1:
-                    print(f"[OCR] Found text at y={y}: '{text_content}'")
+                    logger.debug(f"[OCR] Found text at y={y}: '{text_content}'")
                     valid_contours.append((x, y, w, h))
 
                     contour_bottom = y + h
                     if contour_bottom > max_bottom:
                         max_bottom = contour_bottom
         except Exception as e:
-            print(f"[OCR] Error processing region: {e}")
+            logger.error(f"[OCR] Error processing region: {e}")
 
-    print(f"[DEBUG] OCR confirmed {len(valid_contours)} text regions from {len(candidates)} candidates")
+    logger.info(f"[DEBUG] OCR confirmed {len(valid_contours)} text regions from {len(candidates)} candidates")
 
     if not valid_contours:
         return None, []
@@ -279,7 +283,7 @@ def get_text_bottom_from_contours(frame: np.ndarray) -> Tuple[Optional[int], Lis
         gap = curr_y - (prev_y + prev_h)
 
         if gap > max_gap:
-            print(f"[GAP] Found large gap ({gap}px > {max_gap}px) at y={curr_y}. Stopping header detection.")
+            logger.info(f"[GAP] Found large gap ({gap}px > {max_gap}px) at y={curr_y}. Stopping header detection.")
             break
 
         final_bottom = max(final_bottom, curr_y + curr_h)
@@ -302,7 +306,7 @@ def estimate_crop_box(frames: List[np.ndarray], task_id: str) -> Tuple[Tuple[int
         scale = analysis_width / W_orig
         analysis_height = int(H_orig * scale)
         frames_small = [cv2.resize(f, (analysis_width, analysis_height)) for f in frames]
-        print(f"[PERF] Downscaled frames to {analysis_width}x{analysis_height} (scale={scale:.3f})")
+        logger.info(f"[PERF] Downscaled frames to {analysis_width}x{analysis_height} (scale={scale:.3f})")
     else:
         frames_small = frames
 
@@ -321,7 +325,7 @@ def estimate_crop_box(frames: List[np.ndarray], task_id: str) -> Tuple[Tuple[int
         valid_contours = []
 
     if text_bottom is None:
-        print("[WARNING] No text on middle frame, checking all frames...")
+        logger.warning("[WARNING] No text on middle frame, checking all frames...")
         all_bottoms = []
         for frame in frames_small:
             bottom_s, _ = get_text_bottom_from_contours(frame)
@@ -330,12 +334,12 @@ def estimate_crop_box(frames: List[np.ndarray], task_id: str) -> Tuple[Tuple[int
 
         if not all_bottoms:
             text_bottom = int(0.05 * H_orig)
-            print("[WARNING] No text detected on any frame!")
+            logger.warning("[WARNING] No text detected on any frame!")
         else:
             text_bottom = int(np.median(all_bottoms))
-            print(f"[INFO] Using median from {len(all_bottoms)} frames: {text_bottom}")
+            logger.info(f"[INFO] Using median from {len(all_bottoms)} frames: {text_bottom}")
     else:
-        print(f"[INFO] Text found on middle frame: bottom={text_bottom}, contours={len(valid_contours)}")
+        logger.info(f"[INFO] Text found on middle frame: bottom={text_bottom}, contours={len(valid_contours)}")
 
     H = H_orig
     W = W_orig
@@ -343,18 +347,18 @@ def estimate_crop_box(frames: List[np.ndarray], task_id: str) -> Tuple[Tuple[int
     margin = max(int(0.01 * H), 10)
     crop_top = text_bottom + margin
 
-    print(f"[CROP] text_bottom={text_bottom}, margin={margin}, crop_top={crop_top}")
+    logger.info(f"[CROP] text_bottom={text_bottom}, margin={margin}, crop_top={crop_top}")
 
     crop_height = H - crop_top
     min_crop_h = max(int(0.4 * H), 250)
 
     if crop_height < min_crop_h:
-        print(f"[WARNING] Crop height {crop_height} < min {min_crop_h}")
+        logger.warning(f"[WARNING] Crop height {crop_height} < min {min_crop_h}")
         crop_top = H - min_crop_h
         crop_height = min_crop_h
 
         if crop_top <= text_bottom:
-            print(f"[ERROR] Cannot satisfy min height! Using minimal margin.")
+            logger.error(f"[ERROR] Cannot satisfy min height! Using minimal margin.")
             crop_top = text_bottom + max(int(0.01 * H), 8)
             crop_height = H - crop_top
 
@@ -533,7 +537,7 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     rh = min(h - ry, rh + 2 * margin)
 
     # Дополнительное обрезание однотонных полос по краям с индивидуальными ограничениями.
-    def _trim_uniform_edges(gray_roi: np.ndarray, max_ratio_std: float = 0.18) -> Tuple[int, int, int, int]:
+    def _trim_uniform_edges(gray_roi: np.ndarray, max_ratio_std: float = 0.18, max_ratio_bottom: float = 0.35) -> Tuple[int, int, int, int]:
         """Возвращает (left, top, width, height) после среза однотонных полос."""
         r_h, r_w = gray_roi.shape
         row_mean = gray_roi.mean(axis=1)
@@ -541,13 +545,16 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
         col_mean = gray_roi.mean(axis=0)
         col_std = gray_roi.std(axis=0)
 
-        std_thresh_row = max(3.0, float(np.percentile(row_std, 20)))
-        std_thresh_col = max(3.0, float(np.percentile(col_std, 20)))
+        # Более агрессивные пороги для детекции однотонных полос
+        std_thresh_row = max(2.5, float(np.percentile(row_std, 15)))
+        std_thresh_col = max(2.5, float(np.percentile(col_std, 15)))
         bright_thresh = 242.0
         dark_thresh = 18.0
 
         max_trim_rows_std = int(r_h * max_ratio_std)
         max_trim_cols_std = int(r_w * max_ratio_std)
+        # Для низа даём больше свободы
+        max_trim_rows_bottom = int(r_h * max_ratio_bottom)
 
         def _scan_forward(arr_mean, arr_std, std_thresh, limit):
             idx = 0
@@ -562,7 +569,8 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
             return idx
 
         top = _scan_forward(row_mean, row_std, std_thresh_row, max_trim_rows_std)
-        bottom = _scan_backward(row_mean, row_std, std_thresh_row, max_trim_rows_std)
+        # Для низа используем увеличенный лимит
+        bottom = _scan_backward(row_mean, row_std, std_thresh_row, max_trim_rows_bottom)
         left = _scan_forward(col_mean, col_std, std_thresh_col, max_trim_cols_std)
         right = _scan_backward(col_mean, col_std, std_thresh_col, max_trim_cols_std)
 
@@ -578,10 +586,10 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     rw = min(rw - trim_l, trim_w)
     rh = min(rh - trim_t, trim_h)
 
-    # Боковые границы: срез не более 15%, низ может срезаться до 25% если он однотонный.
+    # Боковые границы: срез не более 15%, низ может срезаться до 35% если он однотонный.
     max_side_crop_x = int(0.15 * w)
     max_top_crop = int(0.15 * h)
-    max_bottom_crop = int(0.25 * h)
+    max_bottom_crop = int(0.35 * h)
 
     # Ограничиваем слева/справа
     if rx > max_side_crop_x:
@@ -618,7 +626,7 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     final_w = rw
     final_h = rh
 
-    print(f"[AUTOCROP] Original: {w}x{h}, Refined: {final_w}x{final_h} (Removed top={ry}, bottom={h - (ry + rh)}, left={rx}, right={w - (rx + rw)})")
+    logger.info(f"[AUTOCROP] Original: {w}x{h}, Refined: {final_w}x{final_h} (Removed top={ry}, bottom={h - (ry + rh)}, left={rx}, right={w - (rx + rw)})")
 
     return final_x, final_y, final_w, final_h
 
