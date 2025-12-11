@@ -534,7 +534,7 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
 
     # Дополнительное обрезание однотонных светлых/тёмных полос по краям,
     # чтобы убирать белые letterbox'ы.
-    def _trim_uniform_edges(gray_roi: np.ndarray, max_ratio: float = 0.25) -> Tuple[int, int, int, int]:
+    def _trim_uniform_edges(gray_roi: np.ndarray, max_ratio: float = 0.15) -> Tuple[int, int, int, int]:
         r_h, r_w = gray_roi.shape
         row_mean = gray_roi.mean(axis=1)
         row_std = gray_roi.std(axis=1)
@@ -577,6 +577,32 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     ry = ry + trim_t
     rw = min(rw - trim_l, trim_w)
     rh = min(rh - trim_t, trim_h)
+
+    # Не режем больше 12% с каждой стороны, чтобы не съедать полезный контент.
+    max_side_crop_x = int(0.12 * w)
+    max_side_crop_y = int(0.12 * h)
+
+    # Ограничиваем обрезку слева
+    if rx > max_side_crop_x:
+        overshoot = rx - max_side_crop_x
+        rx = max_side_crop_x
+        rw = max(1, rw + overshoot)
+    # Ограничиваем обрезку справа
+    right_cut = w - (rx + rw)
+    if right_cut > max_side_crop_x:
+        excess = right_cut - max_side_crop_x
+        rw = max(1, rw + excess)
+
+    # Ограничиваем обрезку сверху
+    if ry > max_side_crop_y:
+        overshoot = ry - max_side_crop_y
+        ry = max_side_crop_y
+        rh = max(1, rh + overshoot)
+    # Ограничиваем обрезку снизу
+    bottom_cut = h - (ry + rh)
+    if bottom_cut > max_side_crop_y:
+        excess = bottom_cut - max_side_crop_y
+        rh = max(1, rh + excess)
 
     # Лёгкий запас по краям, чтобы не съедать полезный контент.
     pad_x = int(0.02 * w)
