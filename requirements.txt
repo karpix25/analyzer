@@ -7,3 +7,4 @@ httpx
 easyocr
 redis
 python-dotenv
+boto3

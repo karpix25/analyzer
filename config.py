@@ -21,3 +21,11 @@ REDIS_TASK_KEY_PREFIX = os.getenv("REDIS_TASK_KEY_PREFIX", "video_task:")
 
 # Workers
 WORKER_CONCURRENCY = int(os.getenv("WORKER_CONCURRENCY", "3"))
+
+# S3 Storage
+USE_S3 = os.getenv("USE_S3", "false").lower() == "true"
+S3_BUCKET = os.getenv("S3_BUCKET", "")
+S3_REGION = os.getenv("S3_REGION", "us-east-1")
+S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY", "")
+S3_SECRET_KEY = os.getenv("S3_SECRET_KEY", "")
+S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", None)  # For custom S3-compatible services
