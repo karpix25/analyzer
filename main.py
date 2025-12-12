@@ -224,6 +224,7 @@ async def process_video_task(
             cx, cy, cw, ch = refine_crop_rect(median_frame, motion_x, motion_y, motion_w, motion_h)
             
         bbox_clean = (cx, cy, cw, ch)
+        bbox_rough = (motion_x, motion_y, motion_w, motion_h)  # For debug/logging
 
         best_frame, quality = select_best_frame(frames, bbox_clean)
         preview = best_frame[cy : cy + ch, cx : cx + cw]
