@@ -611,8 +611,26 @@ def select_best_frame(frames: List[np.ndarray], bbox: Tuple[int, int, int, int])
     return best_frame, best_score
 
 
-def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple[int, int, int, int]:
-    """Уточняет область обрезки, убирая черные полосы (letterbox) внутри указанного ROI."""
+def refine_crop_rect(
+    frame: np.ndarray, 
+    x: int, 
+    y: int, 
+    w: int, 
+    h: int,
+    task_id: Optional[str] = None,
+    save_debug: bool = True
+) -> Tuple[int, int, int, int]:
+    """Уточняет область обрезки, убирая черные полосы (letterbox) внутри указанного ROI.
+    
+    Args:
+        frame: Исходный кадр
+        x, y, w, h: Входной bbox (rough crop)
+        task_id: ID задачи для сохранения debug изображения
+        save_debug: Сохранять ли debug визуализацию
+    
+    Returns:
+        Refined bbox (x, y, w, h)
+    """
     if w <= 0 or h <= 0:
         return x, y, w, h
 
@@ -903,6 +921,85 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
             logger.info(f"[AUTOCROP] Applied additional bottom trim: {additional_bottom_trim}px")
 
     logger.info(f"[AUTOCROP] Original: {w}x{h}, Refined: {final_w}x{final_h} (Removed top={ry}, bottom={h - (ry + final_h)}, left={rx}, right={w - (rx + rw)})")
+
+    # === DEBUG VISUALIZATION ===
+    if save_debug and task_id:
+        try:
+            task_result_dir = RESULT_DIR / task_id
+            task_result_dir.mkdir(exist_ok=True)
+            
+            # Создаём debug изображение на основе полного кадра
+            H_full, W_full = frame.shape[:2]
+            debug_img = frame.copy()
+            
+            # 1. Рисуем входной bbox (синий) - rough crop
+            cv2.rectangle(debug_img, (x, y), (x + w, y + h), (255, 0, 0), 3)
+            cv2.putText(debug_img, "INPUT (rough)", 
+                       (x + 10, y + 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
+            
+            # 2. Рисуем выходной bbox (зелёный) - refined/clean
+            cv2.rectangle(debug_img, (final_x, final_y), (final_x + final_w, final_y + final_h), 
+                         (0, 255, 0), 3)
+            cv2.putText(debug_img, "OUTPUT (clean)", 
+                       (final_x + 10, final_y + final_h - 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            
+            # 3. Показываем обрезанные зоны полупрозрачным красным
+            overlay = debug_img.copy()
+            
+            # Верх (обрезано)
+            if ry > 0:
+                cv2.rectangle(overlay, (x, y), (x + w, y + ry), (0, 0, 255), -1)
+            
+            # Низ (обрезано)
+            if h - (ry + rh) > 0:
+                cv2.rectangle(overlay, (x, y + ry + rh), (x + w, y + h), (0, 0, 255), -1)
+            
+            # Лево (обрезано)
+            if rx > 0:
+                cv2.rectangle(overlay, (x, y), (x + rx, y + h), (0, 0, 255), -1)
+            
+            # Право (обрезано)
+            if w - (rx + rw) > 0:
+                cv2.rectangle(overlay, (x + rx + rw, y), (x + w, y + h), (0, 0, 255), -1)
+            
+            # Смешиваем overlay с оригиналом (transparency)
+            cv2.addWeighted(overlay, 0.3, debug_img, 0.7, 0, debug_img)
+            
+            # 4. Добавляем информацию о обрезке
+            info_y = 40
+            line_h = 35
+            # Чёрный фон для текста
+            cv2.rectangle(debug_img, (5, 5), (550, info_y + line_h * 6), (0, 0, 0), -1)
+            
+            cv2.putText(debug_img, "CLEAN CROP REFINEMENT:", 
+                       (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            info_y += line_h
+            
+            cv2.putText(debug_img, f"Input:  {w}x{h} at ({x}, {y})", 
+                       (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+            info_y += line_h
+            
+            cv2.putText(debug_img, f"Output: {final_w}x{final_h} at ({final_x}, {final_y})", 
+                       (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            info_y += line_h
+            
+            cv2.putText(debug_img, f"Trimmed: T={ry}, B={h - (ry + rh)}, L={rx}, R={w - (rx + rw)}", 
+                       (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            info_y += line_h
+            
+            if bottom_trim_pixels > 0:
+                cv2.putText(debug_img, f"Bottom strip detected: {bottom_trim_pixels}px", 
+                           (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+            
+            # Сохраняем
+            debug_path = task_result_dir / "clean_crop_debug.jpg"
+            cv2.imwrite(str(debug_path), debug_img)
+            logger.info(f"[DEBUG] Saved clean_crop debug: {debug_path}")
+            
+        except Exception as e:
+            logger.error(f"[DEBUG] Failed to save clean_crop debug image: {e}")
 
     return final_x, final_y, final_w, final_h
 
