@@ -206,7 +206,7 @@ async def process_video_task(
             # This prevents: 1) cutting video content (sand), 2) missing top bars (orange)
             
             # Apply refine to FULL FRAME HEIGHT to see top/bottom bars
-            _, refined_y, _, refined_h = refine_crop_rect(median_frame, 0, 0, W, H)
+            _, refined_y, _, refined_h = refine_crop_rect(median_frame, 0, 0, W, H, task_id=task_id)
             
             # Combine: Motion X/W + Refined Y/H
             cx = motion_x
@@ -221,7 +221,7 @@ async def process_video_task(
                 ch = max(1, ch - gap)
         else:
             # Fallback: no motion detected, use refine on rough bbox
-            cx, cy, cw, ch = refine_crop_rect(median_frame, motion_x, motion_y, motion_w, motion_h)
+            cx, cy, cw, ch = refine_crop_rect(median_frame, motion_x, motion_y, motion_w, motion_h, task_id=task_id)
             
         bbox_clean = (cx, cy, cw, ch)
         bbox_rough = (motion_x, motion_y, motion_w, motion_h)  # For debug/logging
@@ -255,6 +255,7 @@ async def process_video_task(
                 "text_frame": s3_urls.get("text_frame"),
                 "debug_frame": s3_urls.get("debug_frame"),
                 "density_profile": s3_urls.get("density_profile"),
+                "clean_crop_debug": s3_urls.get("clean_crop_debug"),
             }
             logger.info(f"[TASK {task_id}] S3 upload completed")
         else:
@@ -268,6 +269,7 @@ async def process_video_task(
                 "text_frame": f"{base_url}/result/{task_id}/text_frame.jpg",
                 "debug_frame": f"{base_url}/result/{task_id}/debug.jpg",
                 "density_profile": f"{base_url}/result/{task_id}/density_profile.jpg",
+                "clean_crop_debug": f"{base_url}/result/{task_id}/clean_crop_debug.jpg",
             }
 
         result = {

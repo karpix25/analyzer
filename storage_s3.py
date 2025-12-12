@@ -135,6 +135,7 @@ class S3Storage:
             "text_frame.jpg": "text_frame",
             "debug.jpg": "debug_frame",
             "density_profile.jpg": "density_profile",
+            "clean_crop_debug.jpg": "clean_crop_debug",
         }
 
         urls = {}
