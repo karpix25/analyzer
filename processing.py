@@ -618,18 +618,22 @@ def refine_crop_rect(
     w: int, 
     h: int,
     task_id: Optional[str] = None,
-    save_debug: bool = True
+    save_debug: bool = True,
+    full_frame: Optional[np.ndarray] = None,
+    roi_offset_y: int = 0
 ) -> Tuple[int, int, int, int]:
     """Уточняет область обрезки, убирая черные полосы (letterbox) внутри указанного ROI.
     
     Args:
-        frame: Исходный кадр
+        frame: Исходный кадр (может быть ROI)
         x, y, w, h: Входной bbox (rough crop)
         task_id: ID задачи для сохранения debug изображения
         save_debug: Сохранять ли debug визуализацию
+        full_frame: Полный кадр для debug (если frame это ROI)
+        roi_offset_y: Смещение Y ROI относительно полного кадра (например, text_bottom)
     
     Returns:
-        Refined bbox (x, y, w, h)
+        Refined bbox (x, y, w, h) - координаты внутри frame
     """
     if w <= 0 or h <= 0:
         return x, y, w, h
@@ -928,21 +932,32 @@ def refine_crop_rect(
             task_result_dir = RESULT_DIR / task_id
             task_result_dir.mkdir(exist_ok=True)
             
-            # Создаём debug изображение на основе полного кадра
-            H_full, W_full = frame.shape[:2]
-            debug_img = frame.copy()
+            # Используем полный кадр для debug если передан, иначе текущий frame
+            if full_frame is not None:
+                debug_img = full_frame.copy()
+                H_full, W_full = full_frame.shape[:2]
+            else:
+                debug_img = frame.copy()
+                H_full, W_full = frame.shape[:2]
+            
+            # Пересчитываем координаты в глобальные (полного кадра)
+            global_x = x
+            global_y = y + roi_offset_y
+            global_final_x = final_x
+            global_final_y = final_y + roi_offset_y
             
             # 1. Рисуем входной bbox (синий) - rough crop
-            cv2.rectangle(debug_img, (x, y), (x + w, y + h), (255, 0, 0), 3)
+            cv2.rectangle(debug_img, (global_x, global_y), (global_x + w, global_y + h), (255, 0, 0), 3)
             cv2.putText(debug_img, "INPUT (rough)", 
-                       (x + 10, y + 30), 
+                       (global_x + 10, global_y + 30), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
             
             # 2. Рисуем выходной bbox (зелёный) - refined/clean
-            cv2.rectangle(debug_img, (final_x, final_y), (final_x + final_w, final_y + final_h), 
+            cv2.rectangle(debug_img, (global_final_x, global_final_y), 
+                         (global_final_x + final_w, global_final_y + final_h), 
                          (0, 255, 0), 3)
             cv2.putText(debug_img, "OUTPUT (clean)", 
-                       (final_x + 10, final_y + final_h - 20), 
+                       (global_final_x + 10, global_final_y + final_h - 20), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
             
             # 3. Показываем обрезанные зоны полупрозрачным красным
@@ -950,19 +965,19 @@ def refine_crop_rect(
             
             # Верх (обрезано)
             if ry > 0:
-                cv2.rectangle(overlay, (x, y), (x + w, y + ry), (0, 0, 255), -1)
+                cv2.rectangle(overlay, (global_x, global_y), (global_x + w, global_y + ry), (0, 0, 255), -1)
             
             # Низ (обрезано)
             if h - (ry + rh) > 0:
-                cv2.rectangle(overlay, (x, y + ry + rh), (x + w, y + h), (0, 0, 255), -1)
+                cv2.rectangle(overlay, (global_x, global_y + ry + rh), (global_x + w, global_y + h), (0, 0, 255), -1)
             
             # Лево (обрезано)
             if rx > 0:
-                cv2.rectangle(overlay, (x, y), (x + rx, y + h), (0, 0, 255), -1)
+                cv2.rectangle(overlay, (global_x, global_y), (global_x + rx, global_y + h), (0, 0, 255), -1)
             
             # Право (обрезано)
             if w - (rx + rw) > 0:
-                cv2.rectangle(overlay, (x + rx + rw, y), (x + w, y + h), (0, 0, 255), -1)
+                cv2.rectangle(overlay, (global_x + rx + rw, global_y), (global_x + w, global_y + h), (0, 0, 255), -1)
             
             # Смешиваем overlay с оригиналом (transparency)
             cv2.addWeighted(overlay, 0.3, debug_img, 0.7, 0, debug_img)
@@ -971,23 +986,28 @@ def refine_crop_rect(
             info_y = 40
             line_h = 35
             # Чёрный фон для текста
-            cv2.rectangle(debug_img, (5, 5), (550, info_y + line_h * 6), (0, 0, 0), -1)
+            cv2.rectangle(debug_img, (5, 5), (600, info_y + line_h * 7), (0, 0, 0), -1)
             
             cv2.putText(debug_img, "CLEAN CROP REFINEMENT:", 
                        (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             info_y += line_h
             
-            cv2.putText(debug_img, f"Input:  {w}x{h} at ({x}, {y})", 
+            cv2.putText(debug_img, f"Input:  {w}x{h} at ({global_x}, {global_y})", 
                        (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
             info_y += line_h
             
-            cv2.putText(debug_img, f"Output: {final_w}x{final_h} at ({final_x}, {final_y})", 
+            cv2.putText(debug_img, f"Output: {final_w}x{final_h} at ({global_final_x}, {global_final_y})", 
                        (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             info_y += line_h
             
             cv2.putText(debug_img, f"Trimmed: T={ry}, B={h - (ry + rh)}, L={rx}, R={w - (rx + rw)}", 
                        (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             info_y += line_h
+            
+            if roi_offset_y > 0:
+                cv2.putText(debug_img, f"ROI offset Y: {roi_offset_y}px (from text_bottom)", 
+                           (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                info_y += line_h
             
             if bottom_trim_pixels > 0:
                 cv2.putText(debug_img, f"Bottom strip detected: {bottom_trim_pixels}px", 

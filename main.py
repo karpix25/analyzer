@@ -212,7 +212,12 @@ async def process_video_task(
             content_h = H - content_start_y
             
             # Apply refine ТОЛЬКО к контентной области
-            _, roi_y, _, roi_h = refine_crop_rect(content_roi, 0, 0, W, content_h, task_id=task_id)
+            _, roi_y, _, roi_h = refine_crop_rect(
+                content_roi, 0, 0, W, content_h,
+                task_id=task_id,
+                full_frame=median_frame,
+                roi_offset_y=text_bottom
+            )
             
             # Пересчитываем координаты в полный кадр
             refined_y = content_start_y + roi_y
@@ -232,7 +237,12 @@ async def process_video_task(
             
             # ИСПРАВЛЕНИЕ: Применяем refine ТОЛЬКО для высоты
             # Ширину берём из motion detection (она правильная)
-            _, roi_y, _, roi_h = refine_crop_rect(content_roi, 0, 0, W, content_h, task_id=task_id)
+            _, roi_y, _, roi_h = refine_crop_rect(
+                content_roi, 0, 0, W, content_h,
+                task_id=task_id,
+                full_frame=median_frame,
+                roi_offset_y=text_bottom
+            )
             
             # Координаты: ширину берём из motion, высоту из refine
             cx = motion_x
