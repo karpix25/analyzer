@@ -192,15 +192,36 @@ async def process_video_task(
             raise Exception("Недостаточно кадров для анализа")
 
         bbox_rough, text_bottom, is_motion = estimate_crop_box(frames, task_id)
-        x, y, w, h = bbox_rough
+        motion_x, motion_y, motion_w, motion_h = bbox_rough
 
         # Calculate median frame to isolate static background and remove dynamic noise
-        # This makes clean_crop much more robust for detecting uniform backgrounds
         frames_arr = np.array(frames)
         median_frame = np.median(frames_arr, axis=0).astype(np.uint8)
+        H, W = median_frame.shape[:2]
         
-        # Run refine logic on the MEDIAN frame
-        cx, cy, cw, ch = refine_crop_rect(median_frame, x, y, w, h)
+        if is_motion:
+            # HYBRID APPROACH when motion detection succeeded:
+            # - Use Motion Detection for HORIZONTAL bounds (x, width) - they are accurate
+            # - Use Refine for VERTICAL bounds (y, height) - to trim top/bottom uniform strips
+            # This prevents: 1) cutting video content (sand), 2) missing top bars (orange)
+            
+            # Apply refine to FULL FRAME HEIGHT to see top/bottom bars
+            _, refined_y, _, refined_h = refine_crop_rect(median_frame, 0, 0, W, H)
+            
+            # Combine: Motion X/W + Refined Y/H
+            cx = motion_x
+            cw = motion_w
+            cy = refined_y
+            ch = refined_h
+            
+            # Ensure we don't cut above text_bottom (text protection)
+            if text_bottom > cy:
+                gap = text_bottom - cy
+                cy = text_bottom
+                ch = max(1, ch - gap)
+        else:
+            # Fallback: no motion detected, use refine on rough bbox
+            cx, cy, cw, ch = refine_crop_rect(median_frame, motion_x, motion_y, motion_w, motion_h)
             
         bbox_clean = (cx, cy, cw, ch)
 
