@@ -767,33 +767,69 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
         col_mean = gray_roi.mean(axis=0)
         col_std = gray_roi.std(axis=0)
 
-        # Более агрессивные пороги для детекции однотонных полос (особенно тонких)
-        # Строгие пороги: режем только если это РЕАЛЬНО однотонный цвет (std < 1.0)
-        # Это предотвращает обрезку песка, стен и других текстур, которые раньше считались фоном.
+        # Строгий порог однородности: 1.0 (для чистого цвета)
         std_thresh_row = 1.0
         std_thresh_col = 1.0
-        bright_thresh = 242.0
-        dark_thresh = 20.0
 
         max_trim_rows_std = int(r_h * max_ratio_std)
         max_trim_cols_std = int(r_w * max_ratio_std)
-        # Для низа даём больше свободы
         max_trim_rows_bottom = int(r_h * max_ratio_bottom)
 
         def _scan_forward(arr_mean, arr_std, std_thresh, limit):
+            if limit <= 0 or len(arr_mean) == 0:
+                return 0
+            
+            # Определяем эталонный цвет фона по краю
+            bg_ref = arr_mean[0]
+            
             idx = 0
-            while idx < limit and arr_std[idx] < std_thresh and (arr_mean[idx] > bright_thresh or arr_mean[idx] < dark_thresh):
+            while idx < limit:
+                # 1. Проверка на однородность (нет текстуры/шума)
+                if arr_std[idx] > std_thresh:
+                    break
+                
+                # 2. Проверка на непрерывность цвета (защита от перехода Фон -> Объект)
+                # Если цвет отличается более чем на 15 единиц, останавливаемся
+                if abs(arr_mean[idx] - bg_ref) > 15.0:
+                    break
+                    
                 idx += 1
             return idx
 
         def _scan_backward(arr_mean, arr_std, std_thresh, limit):
-            idx = len(arr_mean)
-            while idx > 0 and (len(arr_mean) - idx) < limit and arr_std[idx - 1] < std_thresh and (arr_mean[idx - 1] > bright_thresh or arr_mean[idx - 1] < dark_thresh):
+            if limit <= 0 or len(arr_mean) == 0:
+                return len(arr_mean) # Should return index, scan backward returns index from end? No, logic below uses index.
+            
+            # Logic: idx counts from end? 
+            # Original _scan_backward returned INDEX. 
+            # If idx=len, crop=0. If idx=len-k, crop=k?
+            # Let's match original signature: returns capture index.
+            
+            limit_idx = len(arr_mean) - limit
+            idx = len(arr_mean) - 1
+            
+            # Reference color at the very bottom/right edge
+            if idx >= 0:
+                bg_ref = arr_mean[idx]
+            else:
+                return len(arr_mean)
+
+            # Move upwards/leftwards
+            while idx > 0 and idx > limit_idx:
+                # Check current line (idx-1 or idx? Original used idx-1 for check. Let's look at loop)
+                # Original: while idx > 0 ... arr_std[idx-1] ... idx -= 1
+                # So it checks the pixel BEFORE the current boundary.
+                
+                if arr_std[idx - 1] > std_thresh:
+                    break
+                
+                if abs(arr_mean[idx - 1] - bg_ref) > 15.0:
+                    break
+                    
                 idx -= 1
             return idx
 
         top = _scan_forward(row_mean, row_std, std_thresh_row, max_trim_rows_std)
-        # Для низа используем увеличенный лимит
         bottom = _scan_backward(row_mean, row_std, std_thresh_row, max_trim_rows_bottom)
         left = _scan_forward(col_mean, col_std, std_thresh_col, max_trim_cols_std)
         right = _scan_backward(col_mean, col_std, std_thresh_col, max_trim_cols_std)
@@ -810,10 +846,9 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     rw = min(rw - trim_l, trim_w)
     rh = min(rh - trim_t, trim_h)
 
-    # Боковые границы: срез не более 10%, низ может срезаться до 40% (вернем 40% так как используем медиану).
-    # Боковые границы: срез не более 5%, верх 5%, низ 40%.
-    max_side_crop_x = int(0.05 * w)
-    max_top_crop = int(0.05 * h)
+    # Боковые границы: срез не более 10%, низ может срезаться до 40%
+    max_side_crop_x = int(0.10 * w)
+    max_top_crop = int(0.10 * h)
     max_bottom_crop = int(0.40 * h)
 
     # Ограничиваем слева/справа
