@@ -212,7 +212,7 @@ async def process_video_task(
             content_h = H - content_start_y
             
             # Apply refine ТОЛЬКО к контентной области
-            _, roi_y, _, roi_h = refine_crop_rect(
+            roi_x, roi_y, roi_w, roi_h = refine_crop_rect(
                 content_roi, 0, 0, W, content_h,
                 task_id=task_id,
                 full_frame=median_frame,
@@ -223,9 +223,9 @@ async def process_video_task(
             refined_y = content_start_y + roi_y
             refined_h = roi_h
             
-            # Combine: Motion X/W + Refined Y/H
-            cx = motion_x
-            cw = motion_w
+            # Combine: Refined X/W + Refined Y/H (используем ВСЕ refined координаты)
+            cx = roi_x
+            cw = roi_w
             cy = refined_y
             ch = refined_h
         else:
