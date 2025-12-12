@@ -126,10 +126,9 @@ def detect_video_window_by_motion(
     # Create binary motion mask
     motion_mask = (variance_map > threshold_value).astype(np.uint8) * 255
     
-    # Morphological operations to clean up noise
-    # Morphological operations to clean up noise AND merge detached parts
-    # Increased kernel size significantly to handle 1080p content where parts might be separated
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (30, 30))
+    # Morphological operations to clean up noise AND merge nearby motion regions
+    # Using moderate kernel (15x15) to merge parts without losing subtle motion (e.g., sand)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
     motion_mask = cv2.morphologyEx(motion_mask, cv2.MORPH_OPEN, kernel, iterations=2)
     motion_mask = cv2.morphologyEx(motion_mask, cv2.MORPH_CLOSE, kernel, iterations=3)
     
@@ -782,6 +781,15 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
             # Определяем эталонный цвет фона по краю
             bg_ref = arr_mean[0]
             
+            # ADAPTIVE tolerance: для темных фонов (черный) нужен больший допуск,
+            # так как темное видео (15-20) близко к черному фону (5), но это разные объекты
+            if bg_ref < 30:  # Темный фон (черный)
+                color_tolerance = 20.0
+            elif bg_ref > 225:  # Светлый фон (белый)
+                color_tolerance = 20.0
+            else:  # Средние тона
+                color_tolerance = 12.0
+            
             idx = 0
             while idx < limit:
                 # 1. Проверка на однородность (нет текстуры/шума)
@@ -789,8 +797,7 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
                     break
                 
                 # 2. Проверка на непрерывность цвета (защита от перехода Фон -> Объект)
-                # Если цвет отличается более чем на 10 единиц, останавливаемся
-                if abs(arr_mean[idx] - bg_ref) > 10.0:
+                if abs(arr_mean[idx] - bg_ref) > color_tolerance:
                     break
                     
                 idx += 1
@@ -801,24 +808,28 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
                 return len(arr_mean)
             
             # Start from the END (inclusive length)
-            # If nothing trimmed, return len(arr_mean).
             idx = len(arr_mean)
             limit_idx = len(arr_mean) - limit
             
             # Reference color at the very bottom/right edge
-            # If the edge itself is not uniform/matching, loop will break immediately at first check
             bg_ref = arr_mean[len(arr_mean) - 1]
+            
+            # ADAPTIVE tolerance (same logic as forward)
+            if bg_ref < 30:  # Темный фон (черный)
+                color_tolerance = 20.0
+            elif bg_ref > 225:  # Светлый фон (белый)
+                color_tolerance = 20.0
+            else:  # Средние тона
+                color_tolerance = 12.0
 
             # Move upwards/leftwards
             while idx > limit_idx and idx > 0:
-                # Check the pixel BEFORE the current distinct boundary (idx-1)
-                # If idx=100, we check 99. If 99 is uniform+match, we remove it -> idx=99.
                 curr_check_idx = idx - 1
                 
                 if arr_std[curr_check_idx] > std_thresh:
                     break
                 
-                if abs(arr_mean[curr_check_idx] - bg_ref) > 10.0:
+                if abs(arr_mean[curr_check_idx] - bg_ref) > color_tolerance:
                     break
                     
                 idx -= 1
