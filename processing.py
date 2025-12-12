@@ -789,8 +789,8 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
                     break
                 
                 # 2. Проверка на непрерывность цвета (защита от перехода Фон -> Объект)
-                # Если цвет отличается более чем на 15 единиц, останавливаемся
-                if abs(arr_mean[idx] - bg_ref) > 15.0:
+                # Если цвет отличается более чем на 10 единиц, останавливаемся
+                if abs(arr_mean[idx] - bg_ref) > 10.0:
                     break
                     
                 idx += 1
@@ -798,32 +798,27 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
 
         def _scan_backward(arr_mean, arr_std, std_thresh, limit):
             if limit <= 0 or len(arr_mean) == 0:
-                return len(arr_mean) # Should return index, scan backward returns index from end? No, logic below uses index.
+                return len(arr_mean)
             
-            # Logic: idx counts from end? 
-            # Original _scan_backward returned INDEX. 
-            # If idx=len, crop=0. If idx=len-k, crop=k?
-            # Let's match original signature: returns capture index.
-            
+            # Start from the END (inclusive length)
+            # If nothing trimmed, return len(arr_mean).
+            idx = len(arr_mean)
             limit_idx = len(arr_mean) - limit
-            idx = len(arr_mean) - 1
             
             # Reference color at the very bottom/right edge
-            if idx >= 0:
-                bg_ref = arr_mean[idx]
-            else:
-                return len(arr_mean)
+            # If the edge itself is not uniform/matching, loop will break immediately at first check
+            bg_ref = arr_mean[len(arr_mean) - 1]
 
             # Move upwards/leftwards
-            while idx > 0 and idx > limit_idx:
-                # Check current line (idx-1 or idx? Original used idx-1 for check. Let's look at loop)
-                # Original: while idx > 0 ... arr_std[idx-1] ... idx -= 1
-                # So it checks the pixel BEFORE the current boundary.
+            while idx > limit_idx and idx > 0:
+                # Check the pixel BEFORE the current distinct boundary (idx-1)
+                # If idx=100, we check 99. If 99 is uniform+match, we remove it -> idx=99.
+                curr_check_idx = idx - 1
                 
-                if arr_std[idx - 1] > std_thresh:
+                if arr_std[curr_check_idx] > std_thresh:
                     break
                 
-                if abs(arr_mean[idx - 1] - bg_ref) > 15.0:
+                if abs(arr_mean[curr_check_idx] - bg_ref) > 10.0:
                     break
                     
                 idx -= 1
