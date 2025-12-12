@@ -272,7 +272,7 @@ async def process_video_task(
 
         result = {
             "task_id": task_id,
-            "box": {"x": x, "y": y, "w": w, "h": h},
+            "box": {"x": motion_x, "y": motion_y, "w": motion_w, "h": motion_h},
             "clean_box": {"x": cx, "y": cy, "w": cw, "h": ch},
             "text_bottom": int(text_bottom),
             "score": round(float(quality), 4),
