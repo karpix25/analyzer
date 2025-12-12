@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 from urllib.parse import unquote, urlparse
 
 import cv2
+import numpy as np
 import httpx
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
