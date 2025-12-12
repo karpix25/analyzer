@@ -127,7 +127,9 @@ def detect_video_window_by_motion(
     motion_mask = (variance_map > threshold_value).astype(np.uint8) * 255
     
     # Morphological operations to clean up noise
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    # Morphological operations to clean up noise AND merge detached parts
+    # Increased kernel size significantly to handle 1080p content where parts might be separated
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (30, 30))
     motion_mask = cv2.morphologyEx(motion_mask, cv2.MORPH_OPEN, kernel, iterations=2)
     motion_mask = cv2.morphologyEx(motion_mask, cv2.MORPH_CLOSE, kernel, iterations=3)
     
@@ -766,8 +768,10 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
         col_std = gray_roi.std(axis=0)
 
         # Более агрессивные пороги для детекции однотонных полос (особенно тонких)
-        std_thresh_row = max(2.0, float(np.percentile(row_std, 10)))
-        std_thresh_col = max(2.0, float(np.percentile(col_std, 10)))
+        # Строгие пороги: режем только если это РЕАЛЬНО однотонный цвет (std < 1.0)
+        # Это предотвращает обрезку песка, стен и других текстур, которые раньше считались фоном.
+        std_thresh_row = 1.0
+        std_thresh_col = 1.0
         bright_thresh = 242.0
         dark_thresh = 20.0
 
@@ -807,8 +811,9 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
     rh = min(rh - trim_t, trim_h)
 
     # Боковые границы: срез не более 10%, низ может срезаться до 40% (вернем 40% так как используем медиану).
-    max_side_crop_x = int(0.10 * w)
-    max_top_crop = int(0.10 * h)
+    # Боковые границы: срез не более 5%, верх 5%, низ 40%.
+    max_side_crop_x = int(0.05 * w)
+    max_top_crop = int(0.05 * h)
     max_bottom_crop = int(0.40 * h)
 
     # Ограничиваем слева/справа
@@ -833,8 +838,9 @@ def refine_crop_rect(frame: np.ndarray, x: int, y: int, w: int, h: int) -> Tuple
         rh = max(1, rh + excess)
 
     # Лёгкий запас по краям, чтобы не съедать полезный контент.
-    pad_x = int(0.02 * w)
-    pad_y = int(0.02 * h)
+    # Увеличенный запас (5%), чтобы точно не отрезать хвосты/руки
+    pad_x = int(0.05 * w)
+    pad_y = int(0.05 * h)
 
     rx = max(0, rx - pad_x)
     ry = max(0, ry - pad_y)
