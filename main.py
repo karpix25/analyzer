@@ -205,23 +205,39 @@ async def process_video_task(
             # - Use Refine for VERTICAL bounds (y, height) - to trim top/bottom uniform strips
             # This prevents: 1) cutting video content (sand), 2) missing top bars (orange)
             
-            # Apply refine to FULL FRAME HEIGHT to see top/bottom bars
-            _, refined_y, _, refined_h = refine_crop_rect(median_frame, 0, 0, W, H, task_id=task_id)
+            # ВАЖНО: Работаем только с контентной областью (ниже text_bottom)
+            # Берём ROI начиная от text_bottom до конца кадра
+            content_start_y = text_bottom
+            content_roi = median_frame[content_start_y:, :]  # Только контент, без текста
+            content_h = H - content_start_y
+            
+            # Apply refine ТОЛЬКО к контентной области
+            _, roi_y, _, roi_h = refine_crop_rect(content_roi, 0, 0, W, content_h, task_id=task_id)
+            
+            # Пересчитываем координаты в полный кадр
+            refined_y = content_start_y + roi_y
+            refined_h = roi_h
             
             # Combine: Motion X/W + Refined Y/H
             cx = motion_x
             cw = motion_w
             cy = refined_y
             ch = refined_h
-            
-            # Ensure we don't cut above text_bottom (text protection)
-            if text_bottom > cy:
-                gap = text_bottom - cy
-                cy = text_bottom
-                ch = max(1, ch - gap)
         else:
-            # Fallback: no motion detected, use refine on rough bbox
-            cx, cy, cw, ch = refine_crop_rect(median_frame, motion_x, motion_y, motion_w, motion_h, task_id=task_id)
+            # Fallback: no motion detected, use refine on content area only
+            # Работаем только с областью ниже text_bottom
+            content_start_y = text_bottom
+            content_roi = median_frame[content_start_y:, :]
+            content_h = H - content_start_y
+            
+            # Применяем refine к контентному ROI
+            roi_x, roi_y, roi_w, roi_h = refine_crop_rect(content_roi, motion_x, 0, motion_w, content_h, task_id=task_id)
+            
+            # Пересчитываем в координаты полного кадра
+            cx = roi_x
+            cy = content_start_y + roi_y
+            cw = roi_w
+            ch = roi_h
             
         bbox_clean = (cx, cy, cw, ch)
         bbox_rough = (motion_x, motion_y, motion_w, motion_h)  # For debug/logging
