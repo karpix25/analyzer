@@ -750,25 +750,26 @@ def refine_crop_rect(
         # Уменьшаем edge для лучшей детекции тонких полос
         edge = max(1, int(0.04 * min(h_roi, w_roi)))
         
-        # КРИТИЧНО: НЕ используем нижний край для определения фона!
-        # Большие цветные полосы снизу (оранжевые, черные) искажают медиану
-        # Используем только верх и бока
+        # Используем все 4 стороны для определения фона
+        # Если все стороны одного цвета - это фон
         edges = [
             lab[:edge, :, :],          # Верх
             lab[:, :edge, :],          # Левая сторона
             lab[:, w_roi - edge :, :], # Правая сторона
+            lab[h_roi - edge:, :, :],  # Низ (добавлено для детекции бордового фона)
         ]
         edges_stack = np.concatenate([e.reshape(-1, 3) for e in edges], axis=0)
         bg_color = np.median(edges_stack, axis=0)
 
         dist = np.linalg.norm(lab.astype(np.float32) - bg_color.astype(np.float32), axis=2)
         
-        # Для порога используем только верх и бока
+        # Для порога используем все 4 стороны
         dist_edges = np.concatenate(
             [
                 dist[:edge, :].ravel(),
                 dist[:, :edge].ravel(),
                 dist[:, w_roi - edge :].ravel(),
+                dist[h_roi - edge:, :].ravel(),  # Низ (добавлено)
             ]
         )
         edge_threshold = float(np.percentile(dist_edges, 95)) if dist_edges.size else 0.0
