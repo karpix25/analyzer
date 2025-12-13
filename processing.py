@@ -645,41 +645,25 @@ def refine_crop_rect(
     def _background_aware_mask(bgr: np.ndarray) -> np.ndarray:
         """Строит маску контента, убирая однотонные поля любого цвета (черный/белый/оранжевый и т.п.)."""
         h_roi, w_roi = bgr.shape[:2]
-        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
-
-        # Уменьшаем edge для лучшей детекции тонких полос
-        edge = max(1, int(0.04 * min(h_roi, w_roi)))
         
-        # КРИТИЧНО: НЕ используем нижний край для определения фона!
-        # Большие цветные полосы снизу (оранжевые, черные) искажают медиану
-        # Используем только верх и бока
-        edges = [
-            lab[:edge, :, :],          # Верх
-            lab[:, :edge, :],          # Левая сторона
-            lab[:, w_roi - edge :, :], # Правая сторона
-        ]
-        edges_stack = np.concatenate([e.reshape(-1, 3) for e in edges], axis=0)
-        bg_color = np.median(edges_stack, axis=0)
-
-        dist = np.linalg.norm(lab.astype(np.float32) - bg_color.astype(np.float32), axis=2)
+        # УПРОЩЕННЫЙ ПОДХОД: Фон = темные или светлые области
+        # Это работает лучше чем медиана краёв, которая может быть цветной
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         
-        # Для порога используем только верх и бока
-        dist_edges = np.concatenate(
-            [
-                dist[:edge, :].ravel(),
-                dist[:, :edge].ravel(),
-                dist[:, w_roi - edge :].ravel(),
-            ]
-        )
-        edge_threshold = float(np.percentile(dist_edges, 95)) if dist_edges.size else 0.0
-        # Более агрессивный порог для лучшей детекции
-        threshold = max(6.0, edge_threshold * 1.0)
-
-        mask = (dist > threshold).astype(np.uint8) * 255
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
-        return mask
+        # Фон = либо очень темный (< 50), либо очень светлый (> 200)
+        dark_mask = gray < 50
+        light_mask = gray > 200
+        background_mask = dark_mask | light_mask
+        
+        # Инвертируем: контент = НЕ фон
+        content_mask = (~background_mask).astype(np.uint8) * 255
+        
+        # Морфология для очистки шума и заполнения дыр
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        content_mask = cv2.morphologyEx(content_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+        content_mask = cv2.morphologyEx(content_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        
+        return content_mask
 
     # КРИТИЧНО: Проверяем нижний край ДО расчета bounding rect
     # Это позволяет обнаружить большие цветные полосы снизу
@@ -723,13 +707,27 @@ def refine_crop_rect(
             uniform_ratio = np.sum(uniform_pixels) / len(uniform_pixels)
             
             # Строка считается фоном если:
-            # 1. 75%+ пикселей однотонные (позволяет иметь логотипы/текст)
-            # 2. Медианный цвет либо темный, светлый, или средний тон
-            is_background = (
-                uniform_ratio >= 0.75 and
-                (median_gray < 40 or median_gray > 210 or 
-                 (median_gray > 60 and median_gray < 200))
-            )
+        # 1. 65%+ пикселей однотонные (снижен порог для watermarks)
+        # 2. Цвет либо темный (<50) либо светлый (>200)
+        #    ИЛИ серый (низкая насыщенность)
+        
+        is_dark_or_light = median_gray < 50 or median_gray > 200
+        is_uniform_enough = uniform_ratio >= 0.65  # Снижен с 0.75 для watermarks
+        
+        # Дополнительная проверка: если не темный/светлый, проверяем насыщенность
+        if not is_dark_or_light:
+            # Конвертируем строку в HSV для проверки насыщенности
+            row_bgr = bottom_zone[i:i+1, :]
+            row_hsv = cv2.cvtColor(row_bgr, cv2.COLOR_BGR2HSV)
+            saturation = np.median(row_hsv[:, :, 1])
+            
+            # Если насыщенность низкая (<30), это серый фон
+            # Если высокая, это может быть цветной контент
+            is_gray_background = saturation < 30
+        else:
+            is_gray_background = True
+        
+        is_background = is_uniform_enough and is_gray_background
             
             if is_background:
                 rows_to_trim += 1
@@ -877,7 +875,7 @@ def refine_crop_rect(
     # Боковые границы: срез не более 10%, низ может срезаться до 40%
     max_side_crop_x = int(0.10 * w)
     max_top_crop = int(0.10 * h)
-    max_bottom_crop = int(0.40 * h)
+    max_bottom_crop = int(0.60 * h)  # Увеличено с 40% до 60%
 
     # Ограничиваем слева/справа
     if rx > max_side_crop_x:
