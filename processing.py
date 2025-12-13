@@ -723,13 +723,29 @@ def refine_crop_rect(
             uniform_ratio = np.sum(uniform_pixels) / len(uniform_pixels)
             
             # Строка считается фоном если:
-            # 1. 75%+ пикселей однотонные (позволяет иметь логотипы/текст)
-            # 2. Медианный цвет либо темный, светлый, или средний тон
-            is_background = (
-                uniform_ratio >= 0.75 and
-                (median_gray < 40 or median_gray > 210 or 
-                 (median_gray > 60 and median_gray < 200))
-            )
+            # 1. Высокий uniform_ratio (75%+) - однородная строка
+            # 2. ИЛИ низкая контрастность (полупрозрачный watermark)
+            
+            if uniform_ratio >= 0.75:
+                # Однородная строка - проверяем цвет
+                is_background = (
+                    median_gray < 40 or median_gray > 210 or 
+                    (median_gray > 60 and median_gray < 200)
+                )
+            else:
+                # Неоднородная строка (есть текст?) - проверяем контрастность
+                contrast = np.std(row_gray)
+                
+                # Если контрастность низкая (<15) - это полупрозрачный watermark
+                # Игнорируем его и считаем фоном
+                is_low_contrast_overlay = contrast < 15
+                
+                if is_low_contrast_overlay and (median_gray < 50 or median_gray > 200):
+                    # Полупрозрачный текст на темном/светлом фоне → фон
+                    is_background = True
+                else:
+                    # Высокая контрастность → реальный контент
+                    is_background = False
             
             if is_background:
                 rows_to_trim += 1
