@@ -301,8 +301,8 @@ async def process_video_task(
 
         result = {
             "task_id": task_id,
-            "box": {"x": motion_x, "y": motion_y, "w": motion_w, "h": motion_h},
-            "clean_box": {"x": cx, "y": cy, "w": cw, "h": ch},
+            "box": {"x": int(motion_x), "y": int(motion_y), "w": int(motion_w), "h": int(motion_h)},
+            "clean_box": {"x": int(cx), "y": int(cy), "w": int(cw), "h": int(ch)},
             "text_bottom": int(text_bottom),
             "score": round(float(quality), 4),
             "files": files,
