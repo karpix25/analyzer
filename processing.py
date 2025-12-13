@@ -657,7 +657,6 @@ def refine_crop_rect(
             lab[:edge, :, :],          # Верх
             lab[:, :edge, :],          # Левая сторона
             lab[:, w_roi - edge :, :], # Правая сторона
-            # НЕ ДОБАВЛЯЕМ нижний край!
         ]
         edges_stack = np.concatenate([e.reshape(-1, 3) for e in edges], axis=0)
         bg_color = np.median(edges_stack, axis=0)
@@ -724,27 +723,13 @@ def refine_crop_rect(
             uniform_ratio = np.sum(uniform_pixels) / len(uniform_pixels)
             
             # Строка считается фоном если:
-            # 1. 65%+ пикселей однотонные (снижен порог для watermarks)
-            # 2. Цвет либо темный (<50) либо светлый (>200)
-            #    ИЛИ серый (низкая насыщенность)
-            
-            is_dark_or_light = median_gray < 50 or median_gray > 200
-            is_uniform_enough = uniform_ratio >= 0.65  # Снижен с 0.75 для watermarks
-            
-            # Дополнительная проверка: если не темный/светлый, проверяем насыщенность
-            if not is_dark_or_light:
-                # Конвертируем строку в HSV для проверки насыщенности
-                row_bgr = bottom_zone[i:i+1, :]
-                row_hsv = cv2.cvtColor(row_bgr, cv2.COLOR_BGR2HSV)
-                saturation = np.median(row_hsv[:, :, 1])
-                
-                # Если насыщенность низкая (<30), это серый фон
-                # Если высокая, это может быть цветной контент
-                is_gray_background = saturation < 30
-            else:
-                is_gray_background = True
-            
-            is_background = is_uniform_enough and is_gray_background
+            # 1. 75%+ пикселей однотонные (позволяет иметь логотипы/текст)
+            # 2. Медианный цвет либо темный, светлый, или средний тон
+            is_background = (
+                uniform_ratio >= 0.75 and
+                (median_gray < 40 or median_gray > 210 or 
+                 (median_gray > 60 and median_gray < 200))
+            )
             
             if is_background:
                 rows_to_trim += 1
@@ -892,7 +877,7 @@ def refine_crop_rect(
     # Боковые границы: срез не более 10%, низ может срезаться до 40%
     max_side_crop_x = int(0.10 * w)
     max_top_crop = int(0.10 * h)
-    max_bottom_crop = int(0.60 * h)  # Увеличено с 40% до 60%
+    max_bottom_crop = int(0.40 * h)
 
     # Ограничиваем слева/справа
     if rx > max_side_crop_x:
