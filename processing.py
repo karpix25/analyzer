@@ -986,9 +986,9 @@ def refine_crop_rect(
         col_mean = gray_roi.mean(axis=0)
         col_std = gray_roi.std(axis=0)
 
-        # Строгий порог однородности: 1.0 (для чистого цвета)
-        std_thresh_row = 1.0
-        std_thresh_col = 1.0
+        # Пороги однородности - увеличены для лучшей детекции темных фонов с текстурой
+        std_thresh_row = 5.0  # Увеличено с 1.0 для обрезки темных фонов с артефактами
+        std_thresh_col = 5.0  # Увеличено с 1.0 для обрезки темных фонов с артефактами
 
         max_trim_rows_std = int(r_h * max_ratio_std)
         max_trim_cols_std = int(r_w * max_ratio_std)
@@ -1012,12 +1012,22 @@ def refine_crop_rect(
             
             idx = 0
             while idx < limit:
+                current_mean = arr_mean[idx]
+                current_std = arr_std[idx]
+                
+                # НОВАЯ ЛОГИКА: Если строка/столбец темная (< 30), обрезаем даже если std высокий
+                # Это решает проблему темных фонов с текстурой/градиентом
+                if current_mean < 30:  # Темный фон (черный/бордовый)
+                    idx += 1
+                    continue
+                
+                # Существующая логика: проверка однородности и непрерывности цвета
                 # 1. Проверка на однородность (нет текстуры/шума)
-                if arr_std[idx] > std_thresh:
+                if current_std > std_thresh:
                     break
                 
                 # 2. Проверка на непрерывность цвета (защита от перехода Фон -> Объект)
-                if abs(arr_mean[idx] - bg_ref) > color_tolerance:
+                if abs(current_mean - bg_ref) > color_tolerance:
                     break
                     
                 idx += 1
