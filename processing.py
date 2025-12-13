@@ -710,8 +710,8 @@ def refine_crop_rect(
         if len(bottom_edges) == 0:
             return None
         
-        # Находим самые сильные края
-        threshold = np.percentile(bottom_edges, 85)
+        # Находим самые сильные края (более строгий порог)
+        threshold = np.percentile(bottom_edges, 95)  # Увеличено с 85 до 95
         strong_edges_indices = np.where(bottom_edges > threshold)[0]
         
         if len(strong_edges_indices) == 0:
@@ -727,6 +727,21 @@ def refine_crop_rect(
         
         return edge_idx
     
+    def _is_uniform_region(bgr_region: np.ndarray) -> bool:
+        """Проверяет что регион однородный (фон)."""
+        if bgr_region.shape[0] < 10:
+            return False
+        
+        gray = cv2.cvtColor(bgr_region, cv2.COLOR_BGR2GRAY)
+        
+        # Проверяем однородность по строкам
+        row_stds = gray.std(axis=1)
+        
+        # Если большинство строк однородные (std < 5)
+        uniform_rows = np.sum(row_stds < 5.0) / len(row_stds)
+        
+        return uniform_rows > 0.70  # 70%+ строк однородные
+    
     def _detect_bottom_uniform_strip(bgr_roi: np.ndarray) -> int:
         """Определяет, сколько пикселей снизу нужно обрезать из-за однотонной полосы."""
         h_check, w_check = bgr_roi.shape[:2]
@@ -741,10 +756,19 @@ def refine_crop_rect(
             # Нашли резкую границу - проверяем что ниже действительно фон
             below_height = h_check - edge_boundary
             
-            # Если граница найдена в разумном месте (обрезаем минимум 5% и максимум 60%)
-            if below_height > h_check * 0.05 and below_height < h_check * 0.60:
-                logger.info(f"[EDGE] Found video boundary at y={edge_boundary}, trimming {below_height}px")
-                return below_height
+            # Более строгий диапазон: 10-40% (было 5-60%)
+            if below_height > h_check * 0.10 and below_height < h_check * 0.40:
+                # Проверяем что регион ниже действительно однородный (фон)
+                below_region = bgr_roi[edge_boundary:, :]
+                
+                if _is_uniform_region(below_region):
+                    logger.info(f"[EDGE] Validated boundary at y={edge_boundary}, trimming {below_height}px")
+                    return below_height
+                else:
+                    logger.info(f"[EDGE] Rejected boundary at y={edge_boundary} - region below is not uniform")
+            else:
+                logger.info(f"[EDGE] Rejected boundary at y={edge_boundary} - out of range (10-40%)")
+        
         
         # FALLBACK: Используем построчный анализ (существующая логика)
         # Анализируем нижние 30% кадра (увеличено для лучшего покрытия)
