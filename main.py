@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 
 from config import PUBLIC_BASE_URL, RESULT_DIR, USE_S3, WORKER_CONCURRENCY
-from processing import crop_video_ffmpeg, estimate_crop_box, refine_crop_rect, sample_frames, select_best_frame
+from processing import crop_video_ffmpeg, estimate_crop_box, refine_crop_rect, sample_frames, select_best_frame, detect_video_format
 from schemas import ProcessingJob, TaskInfo, TaskStatus, VideoSubmitRequest, new_task_id, now_iso
 from storage import (
     close_redis,
@@ -199,6 +199,11 @@ async def process_video_task(
         median_frame = np.median(frames_arr, axis=0).astype(np.uint8)
         H, W = median_frame.shape[:2]
         
+        # Определяем формат видео для адаптивной обработки
+        content_roi_for_detection = median_frame[text_bottom:, :]
+        video_format = detect_video_format(content_roi_for_detection)
+        logger.info(f"[TASK {task_id}] Detected video format: {video_format}")
+        
         if is_motion:
             # HYBRID APPROACH when motion detection succeeded:
             # - Use Motion Detection for HORIZONTAL bounds (x, width) - they are accurate
@@ -216,7 +221,8 @@ async def process_video_task(
                 content_roi, 0, 0, W, content_h,
                 task_id=task_id,
                 full_frame=median_frame,
-                roi_offset_y=text_bottom
+                roi_offset_y=text_bottom,
+                video_format=video_format
             )
             
             # Пересчитываем координаты в полный кадр
@@ -241,7 +247,8 @@ async def process_video_task(
                 content_roi, 0, 0, W, content_h,
                 task_id=task_id,
                 full_frame=median_frame,
-                roi_offset_y=text_bottom
+                roi_offset_y=text_bottom,
+                video_format=video_format
             )
             
             # Координаты: ширину берём из motion, высоту из refine

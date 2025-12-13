@@ -611,6 +611,85 @@ def select_best_frame(frames: List[np.ndarray], bbox: Tuple[int, int, int, int])
     return best_frame, best_score
 
 
+# ---- Video format detection ------------------------------------------------
+
+def _has_rounded_corners(frame: np.ndarray) -> bool:
+    """Проверяет наличие скругленных углов (черные области в углах)."""
+    h, w = frame.shape[:2]
+    
+    # Проверяем углы (размер зависит от размера кадра)
+    corner_size = min(50, h // 10, w // 10)
+    
+    if corner_size < 10:
+        return False
+    
+    # Проверяем 4 угла
+    corners = [
+        frame[:corner_size, :corner_size],  # Top-left
+        frame[:corner_size, -corner_size:],  # Top-right
+        frame[-corner_size:, :corner_size],  # Bottom-left
+        frame[-corner_size:, -corner_size:],  # Bottom-right
+    ]
+    
+    dark_corners = 0
+    for corner in corners:
+        gray = cv2.cvtColor(corner, cv2.COLOR_BGR2GRAY)
+        median_val = np.median(gray)
+        # Если угол темный (< 30) - это черная область
+        if median_val < 30:
+            dark_corners += 1
+    
+    # Если 3+ угла темные - скругленные углы
+    return dark_corners >= 3
+
+
+def _has_bottom_overlay(frame: np.ndarray) -> bool:
+    """Проверяет наличие текста/иконок в нижней части."""
+    h, w = frame.shape[:2]
+    
+    # Анализируем нижние 30%
+    bottom_region = frame[int(h * 0.70):, :]
+    
+    if bottom_region.shape[0] < 20:
+        return False
+    
+    gray = cv2.cvtColor(bottom_region, cv2.COLOR_BGR2GRAY)
+    
+    # Ищем края (текст/иконки создают края)
+    edges = cv2.Canny(gray, 50, 150)
+    edge_density = np.sum(edges > 0) / edges.size
+    
+    # Если много краёв (> 2%) - вероятно есть текст/иконки
+    if edge_density > 0.02:
+        return True
+    
+    # Проверяем неоднородность
+    row_stds = gray.std(axis=1)
+    uniform_rows = np.sum(row_stds < 5.0) / len(row_stds)
+    
+    # Если НЕ однородный (< 80% однородных строк) - возможно оверлей
+    return uniform_rows < 0.80
+
+
+def detect_video_format(frame: np.ndarray) -> str:
+    """
+    Определяет формат видео.
+    
+    Returns:
+        'rounded_corners' - видео со скругленными углами
+        'with_overlay' - видео с оверлеем снизу (текст/иконки)
+        'standard' - стандартное видео
+    """
+    # Проверяем в порядке специфичности
+    if _has_rounded_corners(frame):
+        return 'rounded_corners'
+    
+    if _has_bottom_overlay(frame):
+        return 'with_overlay'
+    
+    return 'standard'
+
+
 def refine_crop_rect(
     frame: np.ndarray, 
     x: int, 
@@ -620,7 +699,8 @@ def refine_crop_rect(
     task_id: Optional[str] = None,
     save_debug: bool = True,
     full_frame: Optional[np.ndarray] = None,
-    roi_offset_y: int = 0
+    roi_offset_y: int = 0,
+    video_format: str = 'standard'
 ) -> Tuple[int, int, int, int]:
     """Уточняет область обрезки, убирая черные полосы (letterbox) внутри указанного ROI.
     
@@ -631,6 +711,7 @@ def refine_crop_rect(
         save_debug: Сохранять ли debug визуализацию
         full_frame: Полный кадр для debug (если frame это ROI)
         roi_offset_y: Смещение Y ROI относительно полного кадра (например, text_bottom)
+        video_format: Формат видео ('standard', 'rounded_corners', 'with_overlay')
     
     Returns:
         Refined bbox (x, y, w, h) - координаты внутри frame
@@ -641,6 +722,25 @@ def refine_crop_rect(
     roi = frame[y : y + h, x : x + w]
     if roi.size == 0:
         return x, y, w, h
+    
+    # Логируем определённый формат
+    if task_id:
+        logger.info(f"[TASK {task_id}] Video format: {video_format}")
+    
+    # АДАПТИВНАЯ ОБРАБОТКА: Применяем специфичную стратегию для формата
+    if video_format == 'rounded_corners':
+        # Для скругленных углов: более агрессивная обрезка черных областей
+        logger.info(f"[FORMAT] Applying rounded_corners strategy")
+        # Используем более низкий порог для черного цвета
+        black_threshold = 20  # вместо стандартного 40
+    elif video_format == 'with_overlay':
+        # Для видео с оверлеем: фокус на обрезке снизу
+        logger.info(f"[FORMAT] Applying with_overlay strategy")
+        black_threshold = 40  # стандартный порог
+    else:
+        # Стандартная обработка
+        black_threshold = 40
+
 
     def _background_aware_mask(bgr: np.ndarray) -> np.ndarray:
         """Строит маску контента, убирая однотонные поля любого цвета (черный/белый/оранжевый и т.п.)."""
