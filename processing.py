@@ -645,25 +645,42 @@ def refine_crop_rect(
     def _background_aware_mask(bgr: np.ndarray) -> np.ndarray:
         """Строит маску контента, убирая однотонные поля любого цвета (черный/белый/оранжевый и т.п.)."""
         h_roi, w_roi = bgr.shape[:2]
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+
+        # Уменьшаем edge для лучшей детекции тонких полос
+        edge = max(1, int(0.04 * min(h_roi, w_roi)))
         
-        # УПРОЩЕННЫЙ ПОДХОД: Фон = темные или светлые области
-        # Это работает лучше чем медиана краёв, которая может быть цветной
-        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        # КРИТИЧНО: НЕ используем нижний край для определения фона!
+        # Большие цветные полосы снизу (оранжевые, черные) искажают медиану
+        # Используем только верх и бока
+        edges = [
+            lab[:edge, :, :],          # Верх
+            lab[:, :edge, :],          # Левая сторона
+            lab[:, w_roi - edge :, :], # Правая сторона
+            # НЕ ДОБАВЛЯЕМ нижний край!
+        ]
+        edges_stack = np.concatenate([e.reshape(-1, 3) for e in edges], axis=0)
+        bg_color = np.median(edges_stack, axis=0)
+
+        dist = np.linalg.norm(lab.astype(np.float32) - bg_color.astype(np.float32), axis=2)
         
-        # Фон = либо очень темный (< 50), либо очень светлый (> 200)
-        dark_mask = gray < 50
-        light_mask = gray > 200
-        background_mask = dark_mask | light_mask
-        
-        # Инвертируем: контент = НЕ фон
-        content_mask = (~background_mask).astype(np.uint8) * 255
-        
-        # Морфология для очистки шума и заполнения дыр
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        content_mask = cv2.morphologyEx(content_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-        content_mask = cv2.morphologyEx(content_mask, cv2.MORPH_OPEN, kernel, iterations=1)
-        
-        return content_mask
+        # Для порога используем только верх и бока
+        dist_edges = np.concatenate(
+            [
+                dist[:edge, :].ravel(),
+                dist[:, :edge].ravel(),
+                dist[:, w_roi - edge :].ravel(),
+            ]
+        )
+        edge_threshold = float(np.percentile(dist_edges, 95)) if dist_edges.size else 0.0
+        # Более агрессивный порог для лучшей детекции
+        threshold = max(6.0, edge_threshold * 1.0)
+
+        mask = (dist > threshold).astype(np.uint8) * 255
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+        return mask
 
     # КРИТИЧНО: Проверяем нижний край ДО расчета bounding rect
     # Это позволяет обнаружить большие цветные полосы снизу
