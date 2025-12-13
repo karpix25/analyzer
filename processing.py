@@ -683,12 +683,70 @@ def refine_crop_rect(
 
     # КРИТИЧНО: Проверяем нижний край ДО расчета bounding rect
     # Это позволяет обнаружить большие цветные полосы снизу
+    
+    def _find_video_bottom_edge(bgr_roi: np.ndarray) -> Optional[int]:
+        """Находит нижнюю границу видео по резкому горизонтальному переходу."""
+        h, w = bgr_roi.shape[:2]
+        
+        if h < 40:
+            return None
+        
+        # Конвертируем в grayscale
+        gray = cv2.cvtColor(bgr_roi, cv2.COLOR_BGR2GRAY)
+        
+        # Детектируем горизонтальные края (переходы) с помощью Sobel
+        # dy=1 означает вертикальный градиент (горизонтальные края)
+        sobelx = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+        sobelx_abs = np.abs(sobelx)
+        
+        # Считаем среднюю силу горизонтального края для каждой строки
+        edge_strength = sobelx_abs.mean(axis=1)
+        
+        # Ищем сильные горизонтальные края в нижней половине
+        # (граница видео обычно в нижней части)
+        bottom_half_start = h // 2
+        bottom_edges = edge_strength[bottom_half_start:]
+        
+        if len(bottom_edges) == 0:
+            return None
+        
+        # Находим самые сильные края
+        threshold = np.percentile(bottom_edges, 85)
+        strong_edges_indices = np.where(bottom_edges > threshold)[0]
+        
+        if len(strong_edges_indices) == 0:
+            return None
+        
+        # Берём первый сильный край (самый верхний в нижней половине)
+        # Это вероятно граница между видео и оверлеем
+        edge_idx = strong_edges_indices[0] + bottom_half_start
+        
+        # Проверяем что граница в разумном месте (не слишком высоко)
+        if edge_idx < h * 0.3:  # Не выше 30% от высоты
+            return None
+        
+        return edge_idx
+    
     def _detect_bottom_uniform_strip(bgr_roi: np.ndarray) -> int:
         """Определяет, сколько пикселей снизу нужно обрезать из-за однотонной полосы."""
         h_check, w_check = bgr_roi.shape[:2]
         if h_check < 20:
             return 0
         
+        # НОВЫЙ ПОДХОД: Сначала пробуем найти резкую границу через edge detection
+        # Это помогает когда видео темное и сливается с темным фоном
+        edge_boundary = _find_video_bottom_edge(bgr_roi)
+        
+        if edge_boundary is not None:
+            # Нашли резкую границу - проверяем что ниже действительно фон
+            below_height = h_check - edge_boundary
+            
+            # Если граница найдена в разумном месте (обрезаем минимум 5% и максимум 60%)
+            if below_height > h_check * 0.05 and below_height < h_check * 0.60:
+                logger.info(f"[EDGE] Found video boundary at y={edge_boundary}, trimming {below_height}px")
+                return below_height
+        
+        # FALLBACK: Используем построчный анализ (существующая логика)
         # Анализируем нижние 30% кадра (увеличено для лучшего покрытия)
         bottom_zone_height = max(20, int(h_check * 0.30))
         bottom_zone = bgr_roi[h_check - bottom_zone_height:, :]
