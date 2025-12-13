@@ -1056,11 +1056,20 @@ def refine_crop_rect(
             # Move upwards/leftwards
             while idx > limit_idx and idx > 0:
                 curr_check_idx = idx - 1
+                current_mean = arr_mean[curr_check_idx]
+                current_std = arr_std[curr_check_idx]
                 
-                if arr_std[curr_check_idx] > std_thresh:
+                # НОВАЯ ЛОГИКА: Если строка/столбец темная (< 40), обрезаем даже если std высокий
+                # Симметрично с _scan_forward для консистентности
+                if current_mean < 40:  # Темный фон (черный/бордовый/градиенты)
+                    idx -= 1
+                    continue
+                
+                # Существующая логика
+                if current_std > std_thresh:
                     break
                 
-                if abs(arr_mean[curr_check_idx] - bg_ref) > color_tolerance:
+                if abs(current_mean - bg_ref) > color_tolerance:
                     break
                     
                 idx -= 1
