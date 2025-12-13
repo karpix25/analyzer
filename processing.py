@@ -611,6 +611,85 @@ def select_best_frame(frames: List[np.ndarray], bbox: Tuple[int, int, int, int])
     return best_frame, best_score
 
 
+# ---- Video format detection ------------------------------------------------
+
+def _has_rounded_corners(frame: np.ndarray) -> bool:
+    """Проверяет наличие скругленных углов (черные области в углах)."""
+    h, w = frame.shape[:2]
+    
+    # Проверяем углы (размер зависит от размера кадра)
+    corner_size = min(50, h // 10, w // 10)
+    
+    if corner_size < 10:
+        return False
+    
+    # Проверяем 4 угла
+    corners = [
+        frame[:corner_size, :corner_size],  # Top-left
+        frame[:corner_size, -corner_size:],  # Top-right
+        frame[-corner_size:, :corner_size],  # Bottom-left
+        frame[-corner_size:, -corner_size:],  # Bottom-right
+    ]
+    
+    dark_corners = 0
+    for corner in corners:
+        gray = cv2.cvtColor(corner, cv2.COLOR_BGR2GRAY)
+        median_val = np.median(gray)
+        # Если угол темный (< 30) - это черная область
+        if median_val < 30:
+            dark_corners += 1
+    
+    # Если 3+ угла темные - скругленные углы
+    return dark_corners >= 3
+
+
+def _has_bottom_overlay(frame: np.ndarray) -> bool:
+    """Проверяет наличие текста/иконок в нижней части."""
+    h, w = frame.shape[:2]
+    
+    # Анализируем нижние 30%
+    bottom_region = frame[int(h * 0.70):, :]
+    
+    if bottom_region.shape[0] < 20:
+        return False
+    
+    gray = cv2.cvtColor(bottom_region, cv2.COLOR_BGR2GRAY)
+    
+    # Ищем края (текст/иконки создают края)
+    edges = cv2.Canny(gray, 50, 150)
+    edge_density = np.sum(edges > 0) / edges.size
+    
+    # Если много краёв (> 2%) - вероятно есть текст/иконки
+    if edge_density > 0.02:
+        return True
+    
+    # Проверяем неоднородность
+    row_stds = gray.std(axis=1)
+    uniform_rows = np.sum(row_stds < 5.0) / len(row_stds)
+    
+    # Если НЕ однородный (< 80% однородных строк) - возможно оверлей
+    return uniform_rows < 0.80
+
+
+def detect_video_format(frame: np.ndarray) -> str:
+    """
+    Определяет формат видео.
+    
+    Returns:
+        'rounded_corners' - видео со скругленными углами
+        'with_overlay' - видео с оверлеем снизу (текст/иконки)
+        'standard' - стандартное видео
+    """
+    # Проверяем в порядке специфичности
+    if _has_rounded_corners(frame):
+        return 'rounded_corners'
+    
+    if _has_bottom_overlay(frame):
+        return 'with_overlay'
+    
+    return 'standard'
+
+
 def refine_crop_rect(
     frame: np.ndarray, 
     x: int, 
@@ -620,7 +699,8 @@ def refine_crop_rect(
     task_id: Optional[str] = None,
     save_debug: bool = True,
     full_frame: Optional[np.ndarray] = None,
-    roi_offset_y: int = 0
+    roi_offset_y: int = 0,
+    video_format: str = 'standard'
 ) -> Tuple[int, int, int, int]:
     """Уточняет область обрезки, убирая черные полосы (letterbox) внутри указанного ROI.
     
@@ -631,6 +711,7 @@ def refine_crop_rect(
         save_debug: Сохранять ли debug визуализацию
         full_frame: Полный кадр для debug (если frame это ROI)
         roi_offset_y: Смещение Y ROI относительно полного кадра (например, text_bottom)
+        video_format: Формат видео ('standard', 'rounded_corners', 'with_overlay')
     
     Returns:
         Refined bbox (x, y, w, h) - координаты внутри frame
@@ -641,6 +722,25 @@ def refine_crop_rect(
     roi = frame[y : y + h, x : x + w]
     if roi.size == 0:
         return x, y, w, h
+    
+    # Логируем определённый формат
+    if task_id:
+        logger.info(f"[TASK {task_id}] Video format: {video_format}")
+    
+    # АДАПТИВНАЯ ОБРАБОТКА: Применяем специфичную стратегию для формата
+    if video_format == 'rounded_corners':
+        # Для скругленных углов: более агрессивная обрезка черных областей
+        logger.info(f"[FORMAT] Applying rounded_corners strategy")
+        # Используем более низкий порог для черного цвета
+        black_threshold = 20  # вместо стандартного 40
+    elif video_format == 'with_overlay':
+        # Для видео с оверлеем: фокус на обрезке снизу
+        logger.info(f"[FORMAT] Applying with_overlay strategy")
+        black_threshold = 40  # стандартный порог
+    else:
+        # Стандартная обработка
+        black_threshold = 40
+
 
     def _background_aware_mask(bgr: np.ndarray) -> np.ndarray:
         """Строит маску контента, убирая однотонные поля любого цвета (черный/белый/оранжевый и т.п.)."""
@@ -650,30 +750,32 @@ def refine_crop_rect(
         # Уменьшаем edge для лучшей детекции тонких полос
         edge = max(1, int(0.04 * min(h_roi, w_roi)))
         
-        # КРИТИЧНО: НЕ используем нижний край для определения фона!
-        # Большие цветные полосы снизу (оранжевые, черные) искажают медиану
-        # Используем только верх и бока
+        # Используем все 4 стороны для определения фона
+        # Если все стороны одного цвета - это фон
         edges = [
             lab[:edge, :, :],          # Верх
             lab[:, :edge, :],          # Левая сторона
             lab[:, w_roi - edge :, :], # Правая сторона
+            lab[h_roi - edge:, :, :],  # Низ (добавлено для детекции бордового фона)
         ]
         edges_stack = np.concatenate([e.reshape(-1, 3) for e in edges], axis=0)
         bg_color = np.median(edges_stack, axis=0)
 
         dist = np.linalg.norm(lab.astype(np.float32) - bg_color.astype(np.float32), axis=2)
         
-        # Для порога используем только верх и бока
+        # Для порога используем все 4 стороны
         dist_edges = np.concatenate(
             [
                 dist[:edge, :].ravel(),
                 dist[:, :edge].ravel(),
                 dist[:, w_roi - edge :].ravel(),
+                dist[h_roi - edge:, :].ravel(),  # Низ (добавлено)
             ]
         )
         edge_threshold = float(np.percentile(dist_edges, 95)) if dist_edges.size else 0.0
-        # Более агрессивный порог для лучшей детекции
-        threshold = max(6.0, edge_threshold * 1.0)
+        # Более строгий порог - только очень похожие на фон пиксели
+        # Уменьшено с 6.0 до 3.0 чтобы не включать темное видео в фон
+        threshold = max(3.0, edge_threshold * 1.0)
 
         mask = (dist > threshold).astype(np.uint8) * 255
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
@@ -683,12 +785,94 @@ def refine_crop_rect(
 
     # КРИТИЧНО: Проверяем нижний край ДО расчета bounding rect
     # Это позволяет обнаружить большие цветные полосы снизу
+    
+    def _find_video_bottom_edge(bgr_roi: np.ndarray) -> Optional[int]:
+        """Находит нижнюю границу видео по резкому горизонтальному переходу."""
+        h, w = bgr_roi.shape[:2]
+        
+        if h < 40:
+            return None
+        
+        # Конвертируем в grayscale
+        gray = cv2.cvtColor(bgr_roi, cv2.COLOR_BGR2GRAY)
+        
+        # Детектируем горизонтальные края (переходы) с помощью Sobel
+        # dy=1 означает вертикальный градиент (горизонтальные края)
+        sobelx = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+        sobelx_abs = np.abs(sobelx)
+        
+        # Считаем среднюю силу горизонтального края для каждой строки
+        edge_strength = sobelx_abs.mean(axis=1)
+        
+        # Ищем сильные горизонтальные края в нижней половине
+        # (граница видео обычно в нижней части)
+        bottom_half_start = h // 2
+        bottom_edges = edge_strength[bottom_half_start:]
+        
+        if len(bottom_edges) == 0:
+            return None
+        
+        # Находим самые сильные края (более строгий порог)
+        threshold = np.percentile(bottom_edges, 95)  # Увеличено с 85 до 95
+        strong_edges_indices = np.where(bottom_edges > threshold)[0]
+        
+        if len(strong_edges_indices) == 0:
+            return None
+        
+        # Берём первый сильный край (самый верхний в нижней половине)
+        # Это вероятно граница между видео и оверлеем
+        edge_idx = strong_edges_indices[0] + bottom_half_start
+        
+        # Проверяем что граница в разумном месте (не слишком высоко)
+        if edge_idx < h * 0.3:  # Не выше 30% от высоты
+            return None
+        
+        return edge_idx
+    
+    def _is_uniform_region(bgr_region: np.ndarray) -> bool:
+        """Проверяет что регион однородный (фон)."""
+        if bgr_region.shape[0] < 10:
+            return False
+        
+        gray = cv2.cvtColor(bgr_region, cv2.COLOR_BGR2GRAY)
+        
+        # Проверяем однородность по строкам
+        row_stds = gray.std(axis=1)
+        
+        # Если большинство строк однородные (std < 5)
+        uniform_rows = np.sum(row_stds < 5.0) / len(row_stds)
+        
+        return uniform_rows > 0.70  # 70%+ строк однородные
+    
     def _detect_bottom_uniform_strip(bgr_roi: np.ndarray) -> int:
         """Определяет, сколько пикселей снизу нужно обрезать из-за однотонной полосы."""
         h_check, w_check = bgr_roi.shape[:2]
         if h_check < 20:
             return 0
         
+        # НОВЫЙ ПОДХОД: Сначала пробуем найти резкую границу через edge detection
+        # Это помогает когда видео темное и сливается с темным фоном
+        edge_boundary = _find_video_bottom_edge(bgr_roi)
+        
+        if edge_boundary is not None:
+            # Нашли резкую границу - проверяем что ниже действительно фон
+            below_height = h_check - edge_boundary
+            
+            # Более строгий диапазон: 10-40% (было 5-60%)
+            if below_height > h_check * 0.10 and below_height < h_check * 0.40:
+                # Проверяем что регион ниже действительно однородный (фон)
+                below_region = bgr_roi[edge_boundary:, :]
+                
+                if _is_uniform_region(below_region):
+                    logger.info(f"[EDGE] Validated boundary at y={edge_boundary}, trimming {below_height}px")
+                    return below_height
+                else:
+                    logger.info(f"[EDGE] Rejected boundary at y={edge_boundary} - region below is not uniform")
+            else:
+                logger.info(f"[EDGE] Rejected boundary at y={edge_boundary} - out of range (10-40%)")
+        
+        
+        # FALLBACK: Используем построчный анализ (существующая логика)
         # Анализируем нижние 30% кадра (увеличено для лучшего покрытия)
         bottom_zone_height = max(20, int(h_check * 0.30))
         bottom_zone = bgr_roi[h_check - bottom_zone_height:, :]
@@ -723,13 +907,29 @@ def refine_crop_rect(
             uniform_ratio = np.sum(uniform_pixels) / len(uniform_pixels)
             
             # Строка считается фоном если:
-            # 1. 75%+ пикселей однотонные (позволяет иметь логотипы/текст)
-            # 2. Медианный цвет либо темный, светлый, или средний тон
-            is_background = (
-                uniform_ratio >= 0.75 and
-                (median_gray < 40 or median_gray > 210 or 
-                 (median_gray > 60 and median_gray < 200))
-            )
+            # 1. Высокий uniform_ratio (75%+) - однородная строка
+            # 2. ИЛИ низкая контрастность (полупрозрачный watermark)
+            
+            if uniform_ratio >= 0.75:
+                # Однородная строка - проверяем цвет
+                is_background = (
+                    median_gray < 40 or median_gray > 210 or 
+                    (median_gray > 60 and median_gray < 200)
+                )
+            else:
+                # Неоднородная строка (есть текст?) - проверяем контрастность
+                contrast = np.std(row_gray)
+                
+                # Если контрастность низкая (<15) - это полупрозрачный watermark
+                # Игнорируем его и считаем фоном
+                is_low_contrast_overlay = contrast < 15
+                
+                if is_low_contrast_overlay and (median_gray < 50 or median_gray > 200):
+                    # Полупрозрачный текст на темном/светлом фоне → фон
+                    is_background = True
+                else:
+                    # Высокая контрастность → реальный контент
+                    is_background = False
             
             if is_background:
                 rows_to_trim += 1
@@ -788,9 +988,9 @@ def refine_crop_rect(
         col_mean = gray_roi.mean(axis=0)
         col_std = gray_roi.std(axis=0)
 
-        # Строгий порог однородности: 1.0 (для чистого цвета)
-        std_thresh_row = 1.0
-        std_thresh_col = 1.0
+        # Пороги однородности - увеличены для лучшей детекции темных фонов с текстурой
+        std_thresh_row = 5.0  # Увеличено с 1.0 для обрезки темных фонов с артефактами
+        std_thresh_col = 5.0  # Увеличено с 1.0 для обрезки темных фонов с артефактами
 
         max_trim_rows_std = int(r_h * max_ratio_std)
         max_trim_cols_std = int(r_w * max_ratio_std)
@@ -814,12 +1014,18 @@ def refine_crop_rect(
             
             idx = 0
             while idx < limit:
+                current_mean = arr_mean[idx]
+                current_std = arr_std[idx]
+                
+                # Проверяем только однородность и непрерывность цвета
+                # Убрана проверка mean < 40 - она вызывала over-trimming
+                
                 # 1. Проверка на однородность (нет текстуры/шума)
-                if arr_std[idx] > std_thresh:
+                if current_std > std_thresh:
                     break
                 
                 # 2. Проверка на непрерывность цвета (защита от перехода Фон -> Объект)
-                if abs(arr_mean[idx] - bg_ref) > color_tolerance:
+                if abs(current_mean - bg_ref) > color_tolerance:
                     break
                     
                 idx += 1
@@ -847,11 +1053,18 @@ def refine_crop_rect(
             # Move upwards/leftwards
             while idx > limit_idx and idx > 0:
                 curr_check_idx = idx - 1
+                current_mean = arr_mean[curr_check_idx]
+                current_std = arr_std[curr_check_idx]
                 
-                if arr_std[curr_check_idx] > std_thresh:
+                # Проверяем только однородность и непрерывность цвета
+                # Убрана проверка mean < 40 - симметрично с _scan_forward
+                
+                # Проверка на однородность
+                if current_std > std_thresh:
                     break
                 
-                if abs(arr_mean[curr_check_idx] - bg_ref) > color_tolerance:
+                # Проверка на непрерывность цвета
+                if abs(current_mean - bg_ref) > color_tolerance:
                     break
                     
                 idx -= 1
@@ -900,15 +1113,11 @@ def refine_crop_rect(
         excess = bottom_cut - max_bottom_crop
         rh = max(1, rh + excess)
 
-    # Лёгкий запас по краям, чтобы не съедать полезный контент.
-    # Увеличенный запас (5%), чтобы точно не отрезать хвосты/руки
-    pad_x = int(0.05 * w)
-    pad_y = int(0.05 * h)
-
-    rx = max(0, rx - pad_x)
-    ry = max(0, ry - pad_y)
-    rw = min(w - rx, rw + 2 * pad_x)
-    rh = min(h - ry, rh + 2 * pad_y)
+    # Padding убран - это костыль который маскирует проблемы детекции
+    # Если границы определены неправильно, нужно улучшать алгоритм, а не добавлять запас
+    # Доверяем _background_aware_mask и _trim_uniform_edges
+    
+    # Оставляем координаты как есть, без расширения
 
     final_x = x + rx
     final_y = y + ry
