@@ -1120,15 +1120,11 @@ def refine_crop_rect(
         excess = bottom_cut - max_bottom_crop
         rh = max(1, rh + excess)
 
-    # Лёгкий запас по краям, чтобы не съедать полезный контент.
-    # Уменьшено с 5% до 1% чтобы не возвращать черные полосы обратно
-    pad_x = int(0.01 * w)  # 1% вместо 5%
-    pad_y = int(0.01 * h)  # 1% вместо 5%
-
-    rx = max(0, rx - pad_x)
-    ry = max(0, ry - pad_y)
-    rw = min(w - rx, rw + 2 * pad_x)
-    rh = min(h - ry, rh + 2 * pad_y)
+    # Padding убран - это костыль который маскирует проблемы детекции
+    # Если границы определены неправильно, нужно улучшать алгоритм, а не добавлять запас
+    # Доверяем _background_aware_mask и _trim_uniform_edges
+    
+    # Оставляем координаты как есть, без расширения
 
     final_x = x + rx
     final_y = y + ry
