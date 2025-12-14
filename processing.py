@@ -766,9 +766,9 @@ def refine_crop_rect(
         # Расстояние каждого пикселя от bg_color
         dist = np.linalg.norm(lab.astype(np.float32) - bg_color.astype(np.float32), axis=2)
         
-        # ПРОСТОЙ ПОРОГ: Всё что дальше 20 от bg_color = контент
-        # 20 достаточно чтобы отличить черный от бордового, белый от черного, etc.
-        threshold = 20.0
+        # ПРОСТОЙ ПОРОГ: Всё что дальше 35 от bg_color = контент
+        # Увеличено с 20 до 35 для лучшего различения видео от фона
+        threshold = 35.0
         
         # Маска: белое = контент, черное = фон
         mask = (dist > threshold).astype(np.uint8) * 255
