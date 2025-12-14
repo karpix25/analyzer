@@ -849,7 +849,12 @@ def refine_crop_rect(
     
     
     def _detect_bottom_text_overlay(bgr_roi: np.ndarray) -> int:
-        """Определяет наличие текста/иконок в нижней части и возвращает высоту для обрезки."""
+        """Определяет наличие текста/иконок в нижней части и возвращает высоту для обрезки.
+        
+        Различает:
+        - Текст как часть видео (на сложном фоне) → НЕ обрезаем
+        - Текст как overlay (на однородном фоне) → обрезаем
+        """
         h, w = bgr_roi.shape[:2]
         if h < 50:
             return 0
@@ -877,12 +882,25 @@ def refine_crop_rect(
         # Плотность мелких контуров
         contour_density = len(small_contours) / (bottom_region.shape[0] * bottom_region.shape[1] / 1000)
         
-        # Уменьшен порог с 0.5 до 0.2 для более чувствительной детекции
-        if contour_density > 0.2:
-            logger.info(f"[TEXT] Detected text/icons at bottom (density={contour_density:.2f}), trimming {bottom_height}px")
-            return bottom_height
+        # Если плотность низкая - текста нет
+        if contour_density <= 0.2:
+            return 0
         
-        return 0
+        # НОВАЯ ЛОГИКА: Проверяем фон под текстом
+        # Если фон однородный (std < 15) → это overlay на черной полосе → обрезаем
+        # Если фон сложный (std > 15) → это часть видео → НЕ обрезаем
+        
+        background_std = gray.std()
+        
+        if background_std < 15:
+            # Однородный фон → overlay (watermark на черной полосе)
+            logger.info(f"[TEXT] Detected OVERLAY text (density={contour_density:.2f}, bg_std={background_std:.1f}), trimming {bottom_height}px")
+            return bottom_height
+        else:
+            # Сложный фон → часть видео (текст на телефоне, в сцене)
+            logger.info(f"[TEXT] Detected VIDEO text (density={contour_density:.2f}, bg_std={background_std:.1f}), NOT trimming")
+            return 0
+    
     
     def _detect_bottom_uniform_strip(bgr_roi: np.ndarray) -> int:
         """Определяет, сколько пикселей снизу нужно обрезать из-за однотонной полосы."""
