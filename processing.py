@@ -743,66 +743,40 @@ def refine_crop_rect(
 
 
     def _background_aware_mask(bgr: np.ndarray) -> np.ndarray:
-        """Строит маску контента, убирая однотонные поля любого цвета (черный/белый/оранжевый и т.п.)."""
+        """УПРОЩЁННАЯ ДЕТЕКЦИЯ: Фон = углы, Контент = всё что далеко от фона."""
         h_roi, w_roi = bgr.shape[:2]
+        
+        # Конвертируем в LAB для лучшего определения цветового расстояния
         lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
-
-        # УЛУЧШЕННАЯ ДЕТЕКЦИЯ ФОНА: Используем углы вместо краёв
-        # После первого этапа обработки углы всегда содержат фон
         
-        # Размер угла: 10% от каждой стороны
-        corner_h = max(10, int(0.10 * h_roi))
-        corner_w = max(10, int(0.10 * w_roi))
+        # Берём 4 угла (10x10%) - они ВСЕГДА содержат фон после первого этапа
+        corner_size = max(10, int(0.10 * min(h_roi, w_roi)))
         
-        # Извлекаем 4 угла
         corners = [
-            lab[:corner_h, :corner_w, :],                           # Верхний левый
-            lab[:corner_h, w_roi - corner_w:, :],                   # Верхний правый
-            lab[h_roi - corner_h:, :corner_w, :],                   # Нижний левый
-            lab[h_roi - corner_h:, w_roi - corner_w:, :],          # Нижний правый
+            lab[:corner_size, :corner_size, :],                              # Верхний левый
+            lab[:corner_size, w_roi - corner_size:, :],                      # Верхний правый
+            lab[h_roi - corner_size:, :corner_size, :],                      # Нижний левый
+            lab[h_roi - corner_size:, w_roi - corner_size:, :],             # Нижний правый
         ]
         
-        # Фильтруем углы по однородности (std < 10 = фон)
-        uniform_corners = []
-        for i, corner in enumerate(corners):
-            corner_gray = cv2.cvtColor(corner, cv2.COLOR_LAB2BGR)
-            corner_gray = cv2.cvtColor(corner_gray, cv2.COLOR_BGR2GRAY)
-            corner_std = corner_gray.std()
-            
-            if corner_std < 10:  # Однородный угол = фон
-                uniform_corners.append(corner)
-                logger.debug(f"[BG_DETECT] Corner {i}: std={corner_std:.1f} → UNIFORM (background)")
-            else:
-                logger.debug(f"[BG_DETECT] Corner {i}: std={corner_std:.1f} → NON-UNIFORM (content)")
-        
-        # Если нет однородных углов, используем все углы (fallback)
-        if not uniform_corners:
-            logger.warning("[BG_DETECT] No uniform corners found, using all corners")
-            uniform_corners = corners
-        
-        # Определяем bg_color из однородных углов
-        corners_stack = np.concatenate([c.reshape(-1, 3) for c in uniform_corners], axis=0)
+        # bg_color = медиана всех углов (без фильтрации!)
+        corners_stack = np.concatenate([c.reshape(-1, 3) for c in corners], axis=0)
         bg_color = np.median(corners_stack, axis=0)
-
+        
+        # Расстояние каждого пикселя от bg_color
         dist = np.linalg.norm(lab.astype(np.float32) - bg_color.astype(np.float32), axis=2)
         
-        # Для порога используем те же углы
-        dist_corners = np.concatenate([dist[:corner_h, :corner_w].ravel(),
-                                       dist[:corner_h, w_roi - corner_w:].ravel(),
-                                       dist[h_roi - corner_h:, :corner_w].ravel(),
-                                       dist[h_roi - corner_h:, w_roi - corner_w:].ravel()])
-        edge_threshold = float(np.percentile(dist_corners, 95)) if dist_corners.size else 0.0
-        # Относительный порог: 2% от среднего размера видео
-        # Для 360px → ~8.6, для 720px → ~17.3
-        # Адаптируется к размеру видео автоматически
-        base_threshold = 0.02 * np.mean([h_roi, w_roi])
-        threshold = max(base_threshold, edge_threshold * 1.0)
-
+        # ПРОСТОЙ ПОРОГ: Всё что дальше 20 от bg_color = контент
+        # 20 достаточно чтобы отличить черный от бордового, белый от черного, etc.
+        threshold = 20.0
+        
+        # Маска: белое = контент, черное = фон
         mask = (dist > threshold).astype(np.uint8) * 255
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        # Убран MORPH_OPEN - он удалял тонкие края видео
-        # Оставлен только MORPH_CLOSE для заполнения дыр внутри контента
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+        
+        # Морфология: заполняем дыры внутри контента
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+        
         return mask
 
     # КРИТИЧНО: Проверяем нижний край ДО расчета bounding rect
