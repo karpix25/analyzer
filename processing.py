@@ -859,8 +859,9 @@ def refine_crop_rect(
         if h < 50:
             return 0
         
-        # Анализируем нижние 40% кадра (увеличено с 30% для лучшего покрытия текста)
-        bottom_height = int(h * 0.4)
+        # Анализируем только нижние 15% кадра (уменьшено с 40%)
+        # Overlay текст обычно в самом низу, не нужно анализировать всю нижнюю часть
+        bottom_height = int(h * 0.15)
         bottom_region = bgr_roi[h - bottom_height:, :]
         
         # Конвертируем в grayscale
