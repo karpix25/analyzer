@@ -781,7 +781,8 @@ def refine_crop_rect(
 
         mask = (dist > threshold).astype(np.uint8) * 255
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        # Убран MORPH_OPEN - он удалял тонкие края видео
+        # Оставлен только MORPH_CLOSE для заполнения дыр внутри контента
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
         return mask
 
