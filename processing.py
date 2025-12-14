@@ -747,32 +747,51 @@ def refine_crop_rect(
         h_roi, w_roi = bgr.shape[:2]
         lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
 
-        # Уменьшаем edge для лучшей детекции тонких полос
-        edge = max(1, int(0.04 * min(h_roi, w_roi)))
+        # УЛУЧШЕННАЯ ДЕТЕКЦИЯ ФОНА: Используем углы вместо краёв
+        # После первого этапа обработки углы всегда содержат фон
         
-        # Используем все 4 стороны для определения фона
-        # Если все стороны одного цвета - это фон
-        edges = [
-            lab[:edge, :, :],          # Верх
-            lab[:, :edge, :],          # Левая сторона
-            lab[:, w_roi - edge :, :], # Правая сторона
-            lab[h_roi - edge:, :, :],  # Низ (добавлено для детекции бордового фона)
+        # Размер угла: 10% от каждой стороны
+        corner_h = max(10, int(0.10 * h_roi))
+        corner_w = max(10, int(0.10 * w_roi))
+        
+        # Извлекаем 4 угла
+        corners = [
+            lab[:corner_h, :corner_w, :],                           # Верхний левый
+            lab[:corner_h, w_roi - corner_w:, :],                   # Верхний правый
+            lab[h_roi - corner_h:, :corner_w, :],                   # Нижний левый
+            lab[h_roi - corner_h:, w_roi - corner_w:, :],          # Нижний правый
         ]
-        edges_stack = np.concatenate([e.reshape(-1, 3) for e in edges], axis=0)
-        bg_color = np.median(edges_stack, axis=0)
+        
+        # Фильтруем углы по однородности (std < 10 = фон)
+        uniform_corners = []
+        for i, corner in enumerate(corners):
+            corner_gray = cv2.cvtColor(corner, cv2.COLOR_LAB2BGR)
+            corner_gray = cv2.cvtColor(corner_gray, cv2.COLOR_BGR2GRAY)
+            corner_std = corner_gray.std()
+            
+            if corner_std < 10:  # Однородный угол = фон
+                uniform_corners.append(corner)
+                logger.debug(f"[BG_DETECT] Corner {i}: std={corner_std:.1f} → UNIFORM (background)")
+            else:
+                logger.debug(f"[BG_DETECT] Corner {i}: std={corner_std:.1f} → NON-UNIFORM (content)")
+        
+        # Если нет однородных углов, используем все углы (fallback)
+        if not uniform_corners:
+            logger.warning("[BG_DETECT] No uniform corners found, using all corners")
+            uniform_corners = corners
+        
+        # Определяем bg_color из однородных углов
+        corners_stack = np.concatenate([c.reshape(-1, 3) for c in uniform_corners], axis=0)
+        bg_color = np.median(corners_stack, axis=0)
 
         dist = np.linalg.norm(lab.astype(np.float32) - bg_color.astype(np.float32), axis=2)
         
-        # Для порога используем все 4 стороны
-        dist_edges = np.concatenate(
-            [
-                dist[:edge, :].ravel(),
-                dist[:, :edge].ravel(),
-                dist[:, w_roi - edge :].ravel(),
-                dist[h_roi - edge:, :].ravel(),  # Низ (добавлено)
-            ]
-        )
-        edge_threshold = float(np.percentile(dist_edges, 95)) if dist_edges.size else 0.0
+        # Для порога используем те же углы
+        dist_corners = np.concatenate([dist[:corner_h, :corner_w].ravel(),
+                                       dist[:corner_h, w_roi - corner_w:].ravel(),
+                                       dist[h_roi - corner_h:, :corner_w].ravel(),
+                                       dist[h_roi - corner_h:, w_roi - corner_w:].ravel()])
+        edge_threshold = float(np.percentile(dist_corners, 95)) if dist_corners.size else 0.0
         # Относительный порог: 2% от среднего размера видео
         # Для 360px → ~8.6, для 720px → ~17.3
         # Адаптируется к размеру видео автоматически
