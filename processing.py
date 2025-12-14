@@ -887,19 +887,46 @@ def refine_crop_rect(
         if contour_density <= 0.2:
             return 0
         
-        # НОВАЯ ЛОГИКА: Проверяем фон под текстом
-        # Если фон однородный (std < 15) → это overlay на черной полосе → обрезаем
-        # Если фон сложный (std > 15) → это часть видео → НЕ обрезаем
-        
+        # ДВУХЭТАПНАЯ ПРОВЕРКА:
+        # 1. Проверяем фон под текстом
         background_std = gray.std()
         
-        if background_std < 15:
-            # Однородный фон → overlay (watermark на черной полосе)
-            logger.info(f"[TEXT] Detected OVERLAY text (density={contour_density:.2f}, bg_std={background_std:.1f}), trimming {bottom_height}px")
+        # Если фон НЕ однородный (std > 15) → это часть видео → НЕ обрезаем
+        if background_std > 15:
+            logger.info(f"[TEXT] Detected VIDEO text (density={contour_density:.2f}, bg_std={background_std:.1f}), NOT trimming")
+            return 0
+        
+        # 2. Фон однородный (std < 15) → проверяем наличие резкой границы
+        # Overlay имеет резкую границу (видео → черная полоса)
+        # Темное видео НЕ имеет резкой границы
+        
+        # Берём область чуть выше текста (10-20% от высоты ROI)
+        boundary_start = max(0, int(h * 0.70))
+        boundary_end = min(h, int(h * 0.85))
+        boundary_region = bgr_roi[boundary_start:boundary_end, :]
+        
+        if boundary_region.shape[0] < 10:
+            # Слишком маленькая область для анализа
+            logger.info(f"[TEXT] Boundary region too small, NOT trimming")
+            return 0
+        
+        # Детектируем горизонтальные края (Sobel по Y)
+        boundary_gray = cv2.cvtColor(boundary_region, cv2.COLOR_BGR2GRAY)
+        sobel_y = cv2.Sobel(boundary_gray, cv2.CV_64F, 0, 1, ksize=3)
+        sobel_y = np.abs(sobel_y)
+        
+        # Ищем сильные горизонтальные края
+        # Усредняем по ширине чтобы найти горизонтальные линии
+        horizontal_edges = sobel_y.mean(axis=1)
+        max_edge_strength = horizontal_edges.max()
+        
+        # Если есть сильная горизонтальная граница → это overlay
+        if max_edge_strength > 30:  # Порог силы края
+            logger.info(f"[TEXT] Detected OVERLAY with boundary (density={contour_density:.2f}, bg_std={background_std:.1f}, edge={max_edge_strength:.1f}), trimming {bottom_height}px")
             return bottom_height
         else:
-            # Сложный фон → часть видео (текст на телефоне, в сцене)
-            logger.info(f"[TEXT] Detected VIDEO text (density={contour_density:.2f}, bg_std={background_std:.1f}), NOT trimming")
+            # Нет резкой границы → это темное видео, не overlay
+            logger.info(f"[TEXT] No sharp boundary (edge={max_edge_strength:.1f}), NOT trimming")
             return 0
     
     
