@@ -942,6 +942,58 @@ def refine_crop_rect(
             return 0
     
     
+    def _detect_uniform_strips_all_sides(bgr_roi: np.ndarray) -> dict:
+        """Детектирует однородные полосы со всех 4 сторон.
+        
+        Returns:
+            dict: {'top': pixels, 'bottom': pixels, 'left': pixels, 'right': pixels}
+        """
+        h, w = bgr_roi.shape[:2]
+        gray = cv2.cvtColor(bgr_roi, cv2.COLOR_BGR2GRAY)
+        
+        result = {'top': 0, 'bottom': 0, 'left': 0, 'right': 0}
+        
+        # Порог однородности
+        std_threshold = 8.0
+        
+        # СВЕРХУ ВНИЗ
+        for y in range(min(int(h * 0.3), h)):
+            row = gray[y, :]
+            if row.std() < std_threshold:
+                result['top'] = y + 1
+            else:
+                break
+        
+        # СНИЗУ ВВЕРХ  
+        for y in range(h - 1, max(int(h * 0.7), 0) - 1, -1):
+            row = gray[y, :]
+            if row.std() < std_threshold:
+                result['bottom'] = h - y
+            else:
+                break
+        
+        # СЛЕВА НАПРАВО
+        for x in range(min(int(w * 0.3), w)):
+            col = gray[:, x]
+            if col.std() < std_threshold:
+                result['left'] = x + 1
+            else:
+                break
+        
+        # СПРАВА НАЛЕВО
+        for x in range(w - 1, max(int(w * 0.7), 0) - 1, -1):
+            col = gray[:, x]
+            if col.std() < std_threshold:
+                result['right'] = w - x
+            else:
+                break
+        
+        if any(result.values()):
+            logger.info(f"[UNIFORM_STRIPS] Detected: top={result['top']}px, bottom={result['bottom']}px, left={result['left']}px, right={result['right']}px")
+        
+        return result
+    
+    
     def _detect_bottom_uniform_strip(bgr_roi: np.ndarray) -> int:
         """Определяет, сколько пикселей снизу нужно обрезать из-за однотонной полосы."""
         h_check, w_check = bgr_roi.shape[:2]
@@ -1057,6 +1109,15 @@ def refine_crop_rect(
     
     # Используем максимум из двух детекций
     bottom_trim_pixels = max(text_trim_pixels, bottom_trim_pixels)
+    
+    # НОВОЕ: Детектируем однородные полосы со ВСЕХ 4 сторон
+    uniform_strips = _detect_uniform_strips_all_sides(roi)
+    
+    # Используем максимум между старой детекцией и новой
+    top_trim = uniform_strips['top']
+    bottom_trim_pixels = max(bottom_trim_pixels, uniform_strips['bottom'])
+    left_trim = uniform_strips['left']
+    right_trim = uniform_strips['right']
     
     if bottom_trim_pixels > 0:
         logger.info(f"[BOTTOM_STRIP] Detected bottom overlay: {bottom_trim_pixels}px ({bottom_trim_pixels/h*100:.1f}%)")
@@ -1254,6 +1315,32 @@ def refine_crop_rect(
         if additional_bottom_trim > 0:
             final_h = max(1, final_h - additional_bottom_trim)
             logger.info(f"[AUTOCROP] Applied additional bottom trim: {additional_bottom_trim}px")
+    
+    # Учитываем обнаруженную верхнюю полосу
+    if top_trim > 0:
+        available_height_from_top = ry  # Сколько уже обрезано сверху
+        additional_top_trim = max(0, top_trim - available_height_from_top)
+        if additional_top_trim > 0:
+            final_y += additional_top_trim
+            final_h = max(1, final_h - additional_top_trim)
+            logger.info(f"[AUTOCROP] Applied additional top trim: {additional_top_trim}px")
+    
+    # Учитываем обнаруженную левую полосу
+    if left_trim > 0:
+        available_width_from_left = rx  # Сколько уже обрезано слева
+        additional_left_trim = max(0, left_trim - available_width_from_left)
+        if additional_left_trim > 0:
+            final_x += additional_left_trim
+            final_w = max(1, final_w - additional_left_trim)
+            logger.info(f"[AUTOCROP] Applied additional left trim: {additional_left_trim}px")
+    
+    # Учитываем обнаруженную правую полосу
+    if right_trim > 0:
+        available_width_from_right = w - (rx + rw)  # Сколько уже обрезано справа
+        additional_right_trim = max(0, right_trim - available_width_from_right)
+        if additional_right_trim > 0:
+            final_w = max(1, final_w - additional_right_trim)
+            logger.info(f"[AUTOCROP] Applied additional right trim: {additional_right_trim}px")
 
     logger.info(f"[AUTOCROP] Original: {w}x{h}, Refined: {final_w}x{final_h} (Removed top={ry}, bottom={h - (ry + final_h)}, left={rx}, right={w - (rx + rw)})")
 
