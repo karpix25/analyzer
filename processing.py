@@ -1222,20 +1222,19 @@ def refine_crop_rect(
     final_w = rw
     final_h = rh
     
-    # СИММЕТРИЧНАЯ ОБРЕЗКА: Если одна сторона на краю, применяем такую же обрезку к другой
-    # Это обеспечивает симметричный результат
+    # СИММЕТРИЧНАЯ ОБРЕЗКА: Используем минимальную обрезку (ту сторону что ближе к краю)
+    # Это максимизирует использование пространства
     left_trim = rx
     right_trim = w - (rx + rw)
     
-    if left_trim == 0 and right_trim > 0:
-        # Левая граница на краю, но справа обрезано → делаем симметрично
-        logger.info(f"[SYMMETRIC] Left at edge (L=0), applying symmetric trim: R={right_trim}px → L={right_trim}px, R={right_trim}px")
-        final_x = x + right_trim
-        final_w = w - (2 * right_trim)
-    elif right_trim == 0 and left_trim > 0:
-        # Правая граница на краю, но слева обрезано → делаем симметрично
-        logger.info(f"[SYMMETRIC] Right at edge (R=0), applying symmetric trim: L={left_trim}px → L={left_trim}px, R={left_trim}px")
-        final_w = w - (2 * left_trim)
+    # Берём минимум из двух обрезок
+    min_trim = min(left_trim, right_trim)
+    
+    # Применяем минимальную обрезку к обеим сторонам
+    if min_trim < left_trim or min_trim < right_trim:
+        logger.info(f"[SYMMETRIC] Applying minimum trim: L={left_trim}px, R={right_trim}px → L={min_trim}px, R={min_trim}px")
+        final_x = x + min_trim
+        final_w = w - (2 * min_trim)
     
     # Учитываем обнаруженную нижнюю полосу
     if bottom_trim_pixels > 0:
