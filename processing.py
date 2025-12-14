@@ -847,6 +847,39 @@ def refine_crop_rect(
         
         return uniform_rows > 0.70  # 70%+ строк однородные
     
+    
+    def _detect_bottom_text_overlay(bgr_roi: np.ndarray) -> int:
+        """Определяет наличие текста/иконок в нижней части и возвращает высоту для обрезки."""
+        h, w = bgr_roi.shape[:2]
+        if h < 50:
+            return 0
+        
+        # Анализируем нижние 30% кадра
+        bottom_height = int(h * 0.3)
+        bottom_region = bgr_roi[h - bottom_height:, :]
+        
+        # Конвертируем в grayscale для детекции контуров
+        gray = cv2.cvtColor(bottom_region, cv2.COLOR_BGR2GRAY)
+        
+        # Детекция краёв (текст/иконки имеют много краёв)
+        edges = cv2.Canny(gray, 50, 150)
+        
+        # Находим контуры
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Фильтруем мелкие контуры (текст = много мелких контуров)
+        small_contours = [c for c in contours if 10 < cv2.contourArea(c) < 500]
+        
+        # Плотность мелких контуров
+        contour_density = len(small_contours) / (bottom_region.shape[0] * bottom_region.shape[1] / 1000)
+        
+        # Если высокая плотность мелких контуров → текст/иконки
+        if contour_density > 0.5:  # Порог плотности
+            logger.info(f"[TEXT] Detected text/icons at bottom (density={contour_density:.2f}), trimming {bottom_height}px")
+            return bottom_height
+        
+        return 0
+    
     def _detect_bottom_uniform_strip(bgr_roi: np.ndarray) -> int:
         """Определяет, сколько пикселей снизу нужно обрезать из-за однотонной полосы."""
         h_check, w_check = bgr_roi.shape[:2]
@@ -953,9 +986,18 @@ def refine_crop_rect(
     
     # Применяем проверку нижнего края на ИСХОДНОМ ROI
     # ВАЖНО: НЕ изменяем roi и h, только запоминаем сколько нужно обрезать!
+    
+    # Сначала проверяем наличие текста/иконок внизу
+    text_trim_pixels = _detect_bottom_text_overlay(roi)
+    
+    # Затем проверяем однородную полосу
     bottom_trim_pixels = _detect_bottom_uniform_strip(roi)
+    
+    # Используем максимум из двух детекций
+    bottom_trim_pixels = max(text_trim_pixels, bottom_trim_pixels)
+    
     if bottom_trim_pixels > 0:
-        logger.info(f"[BOTTOM_STRIP] Detected uniform bottom strip: {bottom_trim_pixels}px ({bottom_trim_pixels/h*100:.1f}%)")
+        logger.info(f"[BOTTOM_STRIP] Detected bottom overlay: {bottom_trim_pixels}px ({bottom_trim_pixels/h*100:.1f}%)")
     
     # Применяем background-aware mask на ИСХОДНОМ ROI
     # (не обрезаем, чтобы сохранить координаты)
