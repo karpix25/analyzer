@@ -770,8 +770,25 @@ def refine_crop_rect(
         # Увеличено с 20 до 35 для лучшего различения видео от фона
         threshold = 35.0
         
-        # Маска: белое = контент, черное = фон
-        mask = (dist > threshold).astype(np.uint8) * 255
+        # Базовая маска по цвету
+        color_mask = (dist > threshold).astype(np.uint8) * 255
+        
+        # ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Однородность (для темного видео на черном фоне)
+        # Если область похожа на фон по цвету, но НЕ однородная → это видео с деталями
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        
+        # Локальное стандартное отклонение (текстура)
+        # Используем размытие для оценки локальной вариации
+        kernel_size = 7
+        mean = cv2.blur(gray.astype(np.float32), (kernel_size, kernel_size))
+        mean_sq = cv2.blur((gray.astype(np.float32) ** 2), (kernel_size, kernel_size))
+        local_std = np.sqrt(np.maximum(mean_sq - mean ** 2, 0))
+        
+        # Если цвет близок к фону (dist < threshold), но есть текстура (std > 5) → это видео!
+        texture_mask = (local_std > 5).astype(np.uint8) * 255
+        
+        # Комбинируем: контент = далеко от фона ИЛИ есть текстура
+        mask = cv2.bitwise_or(color_mask, texture_mask)
         
         # Морфология: заполняем дыры внутри контента
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
