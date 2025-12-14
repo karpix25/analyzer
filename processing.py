@@ -1021,12 +1021,9 @@ def refine_crop_rect(
     
     if bottom_trim_pixels > 0:
         logger.info(f"[BOTTOM_STRIP] Detected bottom overlay: {bottom_trim_pixels}px ({bottom_trim_pixels/h*100:.1f}%)")
-        # КРИТИЧНО: Обрезаем ROI снизу ДО применения маски
-        # Это гарантирует что маска не будет учитывать текст/overlay
-        roi = roi[:h - bottom_trim_pixels, :]
-        h = roi.shape[0]
     
-    # Применяем background-aware mask на (возможно обрезанном) ROI
+    # Применяем background-aware mask на ИСХОДНОМ ROI
+    # (не обрезаем, чтобы сохранить координаты)
     color_mask = _background_aware_mask(roi)
 
     if cv2.countNonZero(color_mask) < 10:
@@ -1036,7 +1033,9 @@ def refine_crop_rect(
     contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     if not contours:
-        # Если контуров нет, возвращаем обрезанный ROI
+        # Если нашли bottom trim, применяем его
+        if bottom_trim_pixels > 0:
+            return x, y, w, max(1, h - bottom_trim_pixels)
         return x, y, w, h
 
     all_points = np.concatenate(contours)
@@ -1194,8 +1193,14 @@ def refine_crop_rect(
     final_w = rw
     final_h = rh
     
-    # bottom_trim_pixels уже применён выше (обрезали ROI до маски)
-    # Эта секция больше не нужна
+    # Учитываем обнаруженную нижнюю полосу
+    if bottom_trim_pixels > 0:
+        # Обрезаем снизу: уменьшаем высоту на величину детектированной полосы
+        available_height_from_bottom = h - (ry + rh)  # Сколько уже обрезано снизу
+        additional_bottom_trim = max(0, bottom_trim_pixels - available_height_from_bottom)
+        if additional_bottom_trim > 0:
+            final_h = max(1, final_h - additional_bottom_trim)
+            logger.info(f"[AUTOCROP] Applied additional bottom trim: {additional_bottom_trim}px")
 
     logger.info(f"[AUTOCROP] Original: {w}x{h}, Refined: {final_w}x{final_h} (Removed top={ry}, bottom={h - (ry + final_h)}, left={rx}, right={w - (rx + rw)})")
 
