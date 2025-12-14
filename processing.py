@@ -1222,6 +1222,21 @@ def refine_crop_rect(
     final_w = rw
     final_h = rh
     
+    # СИММЕТРИЧНАЯ ОБРЕЗКА: Если одна сторона на краю, применяем такую же обрезку к другой
+    # Это обеспечивает симметричный результат
+    left_trim = rx
+    right_trim = w - (rx + rw)
+    
+    if left_trim == 0 and right_trim > 0:
+        # Левая граница на краю, но справа обрезано → делаем симметрично
+        logger.info(f"[SYMMETRIC] Left at edge (L=0), applying symmetric trim: R={right_trim}px → L={right_trim}px, R={right_trim}px")
+        final_x = x + right_trim
+        final_w = w - (2 * right_trim)
+    elif right_trim == 0 and left_trim > 0:
+        # Правая граница на краю, но слева обрезано → делаем симметрично
+        logger.info(f"[SYMMETRIC] Right at edge (R=0), applying symmetric trim: L={left_trim}px → L={left_trim}px, R={left_trim}px")
+        final_w = w - (2 * left_trim)
+    
     # Учитываем обнаруженную нижнюю полосу
     if bottom_trim_pixels > 0:
         # Обрезаем снизу: уменьшаем высоту на величину детектированной полосы
