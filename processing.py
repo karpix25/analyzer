@@ -884,7 +884,8 @@ def refine_crop_rect(
         contour_density = len(small_contours) / (bottom_region.shape[0] * bottom_region.shape[1] / 1000)
         
         # Если плотность низкая - текста нет
-        if contour_density <= 0.2:
+        # Уменьшено с 0.2 до 0.15 для более чувствительной детекции
+        if contour_density <= 0.15:
             return 0
         
         # ДВУХЭТАПНАЯ ПРОВЕРКА:
@@ -921,7 +922,8 @@ def refine_crop_rect(
         max_edge_strength = horizontal_edges.max()
         
         # Если есть сильная горизонтальная граница → это overlay
-        if max_edge_strength > 30:  # Порог силы края
+        # Уменьшено с 30 до 25 для более чувствительной детекции границ
+        if max_edge_strength > 25:  # Порог силы края
             logger.info(f"[TEXT] Detected OVERLAY with boundary (density={contour_density:.2f}, bg_std={background_std:.1f}, edge={max_edge_strength:.1f}), trimming {bottom_height}px")
             return bottom_height
         else:
