@@ -854,8 +854,8 @@ def refine_crop_rect(
         if h < 50:
             return 0
         
-        # Анализируем нижние 30% кадра
-        bottom_height = int(h * 0.3)
+        # Анализируем нижние 40% кадра (увеличено с 30% для лучшего покрытия текста)
+        bottom_height = int(h * 0.4)
         bottom_region = bgr_roi[h - bottom_height:, :]
         
         # Конвертируем в grayscale
