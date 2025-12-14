@@ -858,11 +858,15 @@ def refine_crop_rect(
         bottom_height = int(h * 0.3)
         bottom_region = bgr_roi[h - bottom_height:, :]
         
-        # Конвертируем в grayscale для детекции контуров
+        # Конвертируем в grayscale
         gray = cv2.cvtColor(bottom_region, cv2.COLOR_BGR2GRAY)
         
-        # Детекция краёв (текст/иконки имеют много краёв)
-        edges = cv2.Canny(gray, 50, 150)
+        # Используем адаптивную бинаризацию для лучшей детекции текста на темном фоне
+        binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                       cv2.THRESH_BINARY, 11, 2)
+        
+        # Детекция краёв на бинарном изображении
+        edges = cv2.Canny(binary, 50, 150)
         
         # Находим контуры
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -873,8 +877,8 @@ def refine_crop_rect(
         # Плотность мелких контуров
         contour_density = len(small_contours) / (bottom_region.shape[0] * bottom_region.shape[1] / 1000)
         
-        # Если высокая плотность мелких контуров → текст/иконки
-        if contour_density > 0.5:  # Порог плотности
+        # Уменьшен порог с 0.5 до 0.2 для более чувствительной детекции
+        if contour_density > 0.2:
             logger.info(f"[TEXT] Detected text/icons at bottom (density={contour_density:.2f}), trimming {bottom_height}px")
             return bottom_height
         
