@@ -773,9 +773,11 @@ def refine_crop_rect(
             ]
         )
         edge_threshold = float(np.percentile(dist_edges, 95)) if dist_edges.size else 0.0
-        # Порог для определения фона
-        # Увеличено с 3.0 до 5.0 чтобы не обрезать темные края видео
-        threshold = max(5.0, edge_threshold * 1.0)
+        # Относительный порог: 2% от среднего размера видео
+        # Для 360px → ~8.6, для 720px → ~17.3
+        # Адаптируется к размеру видео автоматически
+        base_threshold = 0.02 * np.mean([h_roi, w_roi])
+        threshold = max(base_threshold, edge_threshold * 1.0)
 
         mask = (dist > threshold).astype(np.uint8) * 255
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
