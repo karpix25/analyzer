@@ -869,14 +869,14 @@ def refine_crop_rect(
         if h < 50:
             return 0
         
-        # FALLBACK: Безусловная обрезка 30% снизу
+        # FALLBACK: Безусловная обрезка 40% снизу (увеличено с 30%)
         # Ловит полупрозрачный текст/логотип который не детектируется другими методами
         # Полупрозрачность (50-70% opacity) делает текст невидимым для:
         # - Контурной детекции (низкая плотность)
         # - Проверки яркости (текст смешивается с видео)
         # - Вычитания медианы (малая разница)
-        fixed_trim = int(h * 0.30)
-        logger.info(f"[TEXT_FALLBACK] Applying unconditional 30% bottom trim: {fixed_trim}px (of {h}px)")
+        fixed_trim = int(h * 0.40)
+        logger.info(f"[TEXT_FALLBACK] Applying unconditional 40% bottom trim: {fixed_trim}px (of {h}px)")
         return fixed_trim
         
         # СТАРЫЙ КОД НИЖЕ - НЕ ВЫПОЛНЯЕТСЯ, оставлен для истории
